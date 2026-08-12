@@ -101,7 +101,23 @@
     box-shadow: 0 10px 40px rgba(0,0,0,.5);
     touch-action: none;
   }
-  #board { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #board { display: block; width: 100%; height: 100%; cursor: none; }
+
+  /* 내 붓 크기를 보여주는 원 — 캔버스에 그려지는 게 아니라 위에 떠 있는 표시 */
+  .brush {
+    position: absolute; pointer-events: none; border-radius: 50%;
+    transform: translate(-50%, -50%);
+    border: 1.5px solid rgba(0,0,0,.8);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,.85);
+    display: none;
+  }
+  .brush.on { display: block; }
+  .brush.erase { border-style: dashed; }
+  .brush::after {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%;
+    background: rgba(0,0,0,.75); box-shadow: 0 0 0 1px rgba(255,255,255,.85);
+  }
 
   .cursor {
     position: absolute; top: 0; left: 0; pointer-events: none;
@@ -170,6 +186,7 @@
     굵기 <input type="range" id="width" min="1" max="60" value="4"><span id="widthVal">4</span>
   </div>
   <div class="sep"></div>
+  <button class="tool" id="undoBtn" title="Ctrl+Z">↶ 실행취소</button>
   <button class="tool danger" id="clearBtn">전체 지우기</button>
 </div>
 
@@ -177,6 +194,7 @@
   <div class="stage">
     <div class="wrap" id="wrap">
       <canvas id="board"></canvas>
+      <div class="brush" id="brush"></div>
     </div>
   </div>
 
@@ -243,6 +261,13 @@
     ctx.restore();
   }
 
+  // 지금까지 그려진 획 조각 전부. 실행취소 때 이걸로 다시 그린다.
+  var ops = [];
+  function redraw() {
+    clearCanvas();
+    for (var i = 0; i < ops.length; i++) drawSeg(ops[i]);
+  }
+
   function toCanvas(ev) {
     var r = canvas.getBoundingClientRect();
     return {
@@ -251,19 +276,22 @@
     };
   }
 
-  var drawing = false, last = null, lastCursorSent = 0;
+  var drawing = false, last = null, lastCursorSent = 0, strokeSeq = 0;
 
   canvas.addEventListener('pointerdown', function (ev) {
     if (ev.button !== 0 && ev.pointerType === 'mouse') return;
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
     drawing = true;
+    strokeSeq++;                 // 여기서부터 새 획 — 실행취소는 이 단위로 지운다
     last = toCanvas(ev);
+    showBrush(ev);
     // 점 하나만 찍는 경우도 보이도록 제자리 선을 하나 긋는다
     emitSeg(last, last);
   });
 
   canvas.addEventListener('pointermove', function (ev) {
     var p = toCanvas(ev);
+    showBrush(ev);
 
     var now = Date.now();
     if (now - lastCursorSent > 45) {
@@ -274,6 +302,15 @@
     if (!drawing) return;
     emitSeg(last, p);
     last = p;
+  });
+
+  canvas.addEventListener('pointerleave', function () {
+    overCanvas = false;
+    brushEl.classList.remove('on');
+  });
+  canvas.addEventListener('pointerenter', function (ev) {
+    overCanvas = true;
+    showBrush(ev);
   });
 
   function stop(ev) {
@@ -292,13 +329,36 @@
 
   function emitSeg(a, b) {
     var seg = {
-      t: 'seg',
+      t: 'seg', sid: strokeSeq,
       x0: Math.round(a.x * 10) / 10, y0: Math.round(a.y * 10) / 10,
       x1: Math.round(b.x * 10) / 10, y1: Math.round(b.y * 10) / 10,
       w: width, c: color, e: tool === 'eraser'
     };
-    drawSeg(seg);   // 내 화면엔 즉시
-    send(seg);      // 남에게도
+    drawSeg(seg);                                  // 내 화면엔 즉시
+    ops.push({ by: me.id, sid: seg.sid, x0: seg.x0, y0: seg.y0, x1: seg.x1, y1: seg.y1, w: seg.w, c: seg.c, e: seg.e });
+    send(seg);                                     // 남에게도
+  }
+
+  // ── 붓 크기 원 ──────────────────────────────────
+  var brushEl = document.getElementById('brush');
+  var lastBrushPos = null, overCanvas = false, brushHideTimer = null;
+
+  function paintBrush() {
+    if (!lastBrushPos) return;
+    var r = canvas.getBoundingClientRect();
+    var scale = r.width / CW;                      // 논리 크기 → 화면 크기 비율
+    var d = Math.max(4, width * scale);
+    brushEl.style.width = d + 'px';
+    brushEl.style.height = d + 'px';
+    brushEl.style.left = lastBrushPos.x * scale + 'px';
+    brushEl.style.top = lastBrushPos.y * scale + 'px';
+    brushEl.classList.toggle('erase', tool === 'eraser');
+    brushEl.classList.add('on');
+  }
+
+  function showBrush(ev) {
+    lastBrushPos = toCanvas(ev);
+    paintBrush();
   }
 
   // ── 도구 UI ─────────────────────────────────────
@@ -332,7 +392,7 @@
     tool = t;
     penBtn.classList.toggle('active', t === 'pen');
     eraserBtn.classList.toggle('active', t === 'eraser');
-    canvas.style.cursor = t === 'eraser' ? 'cell' : 'crosshair';
+    paintBrush();
   }
   penBtn.addEventListener('click', function () { setTool('pen'); });
   eraserBtn.addEventListener('click', function () { setTool('eraser'); });
@@ -342,6 +402,26 @@
   widthEl.addEventListener('input', function () {
     width = Number(widthEl.value);
     widthVal.textContent = width;
+    // 마우스를 아직 캔버스에 올리지 않았어도 크기를 볼 수 있게 가운데에 띄워 준다
+    if (!lastBrushPos) lastBrushPos = { x: CW / 2, y: CH / 2 };
+    paintBrush();
+    // 캔버스 밖에서 굵기만 조절한 경우엔 잠깐 보여줬다 감춘다
+    clearTimeout(brushHideTimer);
+    if (!overCanvas) {
+      brushHideTimer = setTimeout(function () { brushEl.classList.remove('on'); }, 1200);
+    }
+  });
+
+  document.getElementById('undoBtn').addEventListener('click', function () {
+    send({ t: 'undo' });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+    if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      send({ t: 'undo' });
+    }
   });
 
   document.getElementById('clearBtn').addEventListener('click', function () {
@@ -523,8 +603,8 @@
           me.id = m.id;
           me.color = m.color;
           if (!nameInput.value) nameInput.value = m.name;
-          clearCanvas();
-          for (var i = 0; i < m.history.length; i++) drawSeg(m.history[i]);
+          ops = m.history.slice();
+          redraw();
           log.innerHTML = '';
           m.chat.forEach(addChat);
           log.scrollTop = log.scrollHeight;
@@ -536,7 +616,13 @@
           break;
 
         case 'seg':
+          ops.push(m);
           drawSeg(m);
+          break;
+
+        case 'undo':
+          ops = ops.filter(function (o) { return !(o.by === m.by && o.sid === m.sid); });
+          redraw();
           break;
 
         case 'cursor':
@@ -554,6 +640,7 @@
           break;
 
         case 'clear':
+          ops = [];
           clearCanvas();
           addSys(m.by + ' 님이 캔버스를 전체 지웠습니다');
           break;

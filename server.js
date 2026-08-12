@@ -426,11 +426,15 @@ function handle(client, text) {
 
     case 'seg': {
       // 획 한 조각 — 저장해 두었다가 나중에 들어온 사람에게 그대로 재생해 준다.
+      // by/sid 는 실행취소 때 "누구의 몇 번째 획인지" 찾는 데 쓴다.
       const x0 = num(msg.x0), y0 = num(msg.y0), x1 = num(msg.x1), y1 = num(msg.y1);
-      if (x0 === null || y0 === null || x1 === null || y1 === null) return;
+      const sid = num(msg.sid);
+      if (x0 === null || y0 === null || x1 === null || y1 === null || sid === null) return;
 
       const seg = {
         t: 'seg',
+        by: client.id,
+        sid,
         x0: clamp(x0, -50, CANVAS_W + 50),
         y0: clamp(y0, -50, CANVAS_H + 50),
         x1: clamp(x1, -50, CANVAS_W + 50),
@@ -443,6 +447,21 @@ function handle(client, text) {
       history.push(seg);
       if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
       broadcast(seg, client.id);
+      return;
+    }
+
+    case 'undo': {
+      // 이 사람이 그린 획 중 아직 남아 있는 가장 마지막 것을 통째로 지운다.
+      let target = null;
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].by === client.id) { target = history[i].sid; break; }
+      }
+      if (target === null) return;
+
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
+      }
+      broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
       return;
     }
 
