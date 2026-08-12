@@ -455,8 +455,7 @@ function handle(client, text) {
 
     case 'clear': {
       history.length = 0;
-      broadcast({ t: 'clear', by: client.name });
-      send(client, { t: 'clear', by: client.name });
+      broadcast({ t: 'clear', by: client.name });  // 보낸 사람에게도 전달된다
       console.log(`[!] ${client.name} 님이 캔버스를 전체 지웠습니다`);
       return;
     }
@@ -473,8 +472,7 @@ function handle(client, text) {
       };
       chatLog.push(entry);
       if (chatLog.length > MAX_CHAT) chatLog.splice(0, chatLog.length - MAX_CHAT);
-      broadcast({ t: 'chat', msg: entry });
-      send(client, { t: 'chat', msg: entry });
+      broadcast({ t: 'chat', msg: entry });  // 보낸 사람에게도 전달된다
       return;
     }
   }
