@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>공유 그림판</title>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #21252e;
+    --line: #2e3440;
+    --text: #e7eaf0;
+    --muted: #949cad;
+    --accent: #4f8cff;
+  }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Malgun Gothic", "맑은 고딕", -apple-system, "Segoe UI", sans-serif;
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ── 상단 바 ───────────────────────────── */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
+  .dot.on { background: #22c55e; }
+  .dot.off { background: #ef4444; }
+
+  #nameInput {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 10px; font-size: 13px; width: 130px;
+    font-family: inherit;
+  }
+  #nameInput:focus { outline: none; border-color: var(--accent); }
+
+  .peers { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; align-items: center; }
+  .peer {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px 11px 4px 8px; font-size: 12px;
+  }
+  .peer i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+
+  /* ── 도구 바 ───────────────────────────── */
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 9px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .tool {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  .tool:hover { border-color: #48505f; }
+  .tool.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .tool.danger:hover { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+
+  .swatches { display: flex; gap: 5px; }
+  .sw {
+    width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+    border: 2px solid transparent; padding: 0;
+  }
+  .sw.active { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+  #customColor {
+    width: 30px; height: 24px; padding: 0; border: 1px solid var(--line);
+    border-radius: 6px; background: none; cursor: pointer;
+  }
+
+  .sizer { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  #width { width: 110px; accent-color: var(--accent); }
+  #widthVal { width: 26px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+
+  .sep { width: 1px; height: 22px; background: var(--line); }
+
+  /* ── 본문 ─────────────────────────────── */
+  main { flex: 1; display: flex; min-height: 0; }
+
+  .stage {
+    flex: 1; min-width: 0; display: flex;
+    align-items: center; justify-content: center;
+    padding: 14px; background: #0b0d11;
+  }
+  .wrap {
+    position: relative; background: #fff;
+    border-radius: 10px; overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+    touch-action: none;
+  }
+  #board { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+  .cursor {
+    position: absolute; top: 0; left: 0; pointer-events: none;
+    transform: translate(-7px, -7px); transition: left .06s linear, top .06s linear;
+    display: flex; align-items: center; gap: 5px; white-space: nowrap;
+  }
+  .cursor b { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .cursor span {
+    font-size: 11px; color: #fff; padding: 2px 7px; border-radius: 999px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  }
+
+  /* ── 채팅 ─────────────────────────────── */
+  .chat {
+    width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--line);
+  }
+  .chat h2 {
+    margin: 0; padding: 12px 14px; font-size: 13px; font-weight: 700;
+    border-bottom: 1px solid var(--line); color: var(--muted);
+  }
+  #log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 11px; }
+  #log::-webkit-scrollbar { width: 8px; }
+  #log::-webkit-scrollbar-thumb { background: #333a46; border-radius: 4px; }
+  .line .who { font-size: 11px; font-weight: 700; margin-bottom: 3px; display: flex; gap: 6px; align-items: baseline; }
+  .line .who time { color: #6d7686; font-weight: 400; font-size: 10px; }
+  .line .body { font-size: 13px; line-height: 1.5; word-break: break-word; white-space: pre-wrap; }
+  .line.sys { color: var(--muted); font-size: 12px; text-align: center; }
+
+  .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  #chatInput {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit; resize: none;
+    max-height: 90px; line-height: 1.4;
+  }
+  #chatInput:focus { outline: none; border-color: var(--accent); }
+  #sendBtn {
+    background: var(--accent); border: none; color: #fff; border-radius: 8px;
+    padding: 0 15px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+
+  @media (max-width: 860px) {
+    main { flex-direction: column; }
+    .chat { width: auto; height: 240px; border-left: none; border-top: 1px solid var(--line); }
+    .peers { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">🎨 공유 그림판</div>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
+  <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
+  <div class="peers" id="peers"></div>
+</header>
+
+<div class="toolbar">
+  <button class="tool active" id="penBtn">✏️ 펜</button>
+  <button class="tool" id="eraserBtn">🧽 지우개</button>
+  <div class="sep"></div>
+  <div class="swatches" id="swatches"></div>
+  <input type="color" id="customColor" value="#111111" title="직접 색 고르기">
+  <div class="sep"></div>
+  <div class="sizer">
+    굵기 <input type="range" id="width" min="1" max="60" value="4"><span id="widthVal">4</span>
+  </div>
+  <div class="sep"></div>
+  <button class="tool danger" id="clearBtn">전체 지우기</button>
+</div>
+
+<main>
+  <div class="stage">
+    <div class="wrap" id="wrap">
+      <canvas id="board"></canvas>
+    </div>
+  </div>
+
+  <aside class="chat">
+    <h2>채팅</h2>
+    <div id="log"></div>
+    <div class="composer">
+      <textarea id="chatInput" rows="1" placeholder="메시지 입력 (Enter 전송)" maxlength="500"></textarea>
+      <button id="sendBtn">전송</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var CW = 1600, CH = 900;             // 캔버스 논리 크기 (서버와 동일)
+  var canvas = document.getElementById('board');
+  var ctx = canvas.getContext('2d');
+  canvas.width = CW;
+  canvas.height = CH;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  var wrap = document.getElementById('wrap');
+  var me = { id: null, color: '#111111' };
+  var tool = 'pen';
+  var color = '#111111';
+  var width = 4;
+  var ws = null, connected = false;
+
+  // ── 캔버스 크기 맞추기 (비율 유지) ─────────────────
+  function fit() {
+    var stage = wrap.parentElement;
+    var pad = 28;
+    var aw = stage.clientWidth - pad;
+    var ah = stage.clientHeight - pad;
+    if (aw <= 0 || ah <= 0) return;   // 아직 화면에 안 그려진 상태(숨은 탭 등)
+    var scale = Math.min(aw / CW, ah / CH);
+    wrap.style.width = Math.max(160, Math.floor(CW * scale)) + 'px';
+    wrap.style.height = Math.max(90, Math.floor(CH * scale)) + 'px';
+  }
+  window.addEventListener('resize', fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(wrap.parentElement);
+
+  // ── 그리기 ──────────────────────────────────────
+  function drawSeg(s) {
+    ctx.save();
+    ctx.globalCompositeOperation = s.e ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = s.c;
+    ctx.lineWidth = s.w;
+    ctx.beginPath();
+    ctx.moveTo(s.x0, s.y0);
+    ctx.lineTo(s.x1, s.y1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function clearCanvas() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, CW, CH);
+    ctx.restore();
+  }
+
+  function toCanvas(ev) {
+    var r = canvas.getBoundingClientRect();
+    return {
+      x: (ev.clientX - r.left) / r.width * CW,
+      y: (ev.clientY - r.top) / r.height * CH
+    };
+  }
+
+  var drawing = false, last = null, lastCursorSent = 0;
+
+  canvas.addEventListener('pointerdown', function (ev) {
+    if (ev.button !== 0 && ev.pointerType === 'mouse') return;
+    try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
+    drawing = true;
+    last = toCanvas(ev);
+    // 점 하나만 찍는 경우도 보이도록 제자리 선을 하나 긋는다
+    emitSeg(last, last);
+  });
+
+  canvas.addEventListener('pointermove', function (ev) {
+    var p = toCanvas(ev);
+
+    var now = Date.now();
+    if (now - lastCursorSent > 45) {
+      lastCursorSent = now;
+      send({ t: 'cursor', x: p.x, y: p.y });
+    }
+
+    if (!drawing) return;
+    emitSeg(last, p);
+    last = p;
+  });
+
+  function stop(ev) {
+    if (!drawing) return;
+    drawing = false;
+    last = null;
+    try {
+      if (ev && ev.pointerId != null && canvas.hasPointerCapture(ev.pointerId)) {
+        canvas.releasePointerCapture(ev.pointerId);
+      }
+    } catch (e) {}
+  }
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+  canvas.addEventListener('pointerleave', stop);
+
+  function emitSeg(a, b) {
+    var seg = {
+      t: 'seg',
+      x0: Math.round(a.x * 10) / 10, y0: Math.round(a.y * 10) / 10,
+      x1: Math.round(b.x * 10) / 10, y1: Math.round(b.y * 10) / 10,
+      w: width, c: color, e: tool === 'eraser'
+    };
+    drawSeg(seg);   // 내 화면엔 즉시
+    send(seg);      // 남에게도
+  }
+
+  // ── 도구 UI ─────────────────────────────────────
+  var PALETTE = ['#111111', '#e11d48', '#f59e0b', '#16a34a', '#2563eb', '#7c3aed', '#0891b2', '#ffffff'];
+  var swatches = document.getElementById('swatches');
+  PALETTE.forEach(function (c, i) {
+    var b = document.createElement('button');
+    b.className = 'sw' + (i === 0 ? ' active' : '');
+    b.style.background = c;
+    if (c === '#ffffff') b.style.borderColor = '#555';
+    b.title = c;
+    b.addEventListener('click', function () {
+      color = c;
+      document.getElementById('customColor').value = c;
+      [].forEach.call(swatches.children, function (el) { el.classList.remove('active'); });
+      b.classList.add('active');
+      setTool('pen');
+    });
+    swatches.appendChild(b);
+  });
+
+  document.getElementById('customColor').addEventListener('input', function (e) {
+    color = e.target.value;
+    [].forEach.call(swatches.children, function (el) { el.classList.remove('active'); });
+    setTool('pen');
+  });
+
+  var penBtn = document.getElementById('penBtn');
+  var eraserBtn = document.getElementById('eraserBtn');
+  function setTool(t) {
+    tool = t;
+    penBtn.classList.toggle('active', t === 'pen');
+    eraserBtn.classList.toggle('active', t === 'eraser');
+    canvas.style.cursor = t === 'eraser' ? 'cell' : 'crosshair';
+  }
+  penBtn.addEventListener('click', function () { setTool('pen'); });
+  eraserBtn.addEventListener('click', function () { setTool('eraser'); });
+
+  var widthEl = document.getElementById('width');
+  var widthVal = document.getElementById('widthVal');
+  widthEl.addEventListener('input', function () {
+    width = Number(widthEl.value);
+    widthVal.textContent = width;
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    if (confirm('모두의 캔버스를 전부 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) {
+      send({ t: 'clear' });
+    }
+  });
+
+  // ── 참여자 / 커서 ───────────────────────────────
+  var peersEl = document.getElementById('peers');
+  var cursors = {};   // id → {el, timer}
+
+  function renderPeers(list) {
+    peersEl.innerHTML = '';
+    list.forEach(function (p) {
+      var el = document.createElement('span');
+      el.className = 'peer';
+      var i = document.createElement('i');
+      i.style.background = p.color;
+      el.appendChild(i);
+      el.appendChild(document.createTextNode(p.name + (p.id === me.id ? ' (나)' : '')));
+      peersEl.appendChild(el);
+    });
+    // 나간 사람 커서 정리
+    var alive = {};
+    list.forEach(function (p) { alive[p.id] = p; });
+    Object.keys(cursors).forEach(function (id) {
+      if (!alive[id]) removeCursor(id);
+      else {
+        cursors[id].el.querySelector('b').style.background = alive[id].color;
+        cursors[id].el.querySelector('span').style.background = alive[id].color;
+        cursors[id].el.querySelector('span').textContent = alive[id].name;
+      }
+    });
+  }
+
+  function removeCursor(id) {
+    if (!cursors[id]) return;
+    clearTimeout(cursors[id].timer);
+    cursors[id].el.remove();
+    delete cursors[id];
+  }
+
+  function moveCursor(id, x, y, peer) {
+    var c = cursors[id];
+    if (!c) {
+      var el = document.createElement('div');
+      el.className = 'cursor';
+      var dot = document.createElement('b');
+      var tag = document.createElement('span');
+      dot.style.background = (peer && peer.color) || '#888';
+      tag.style.background = (peer && peer.color) || '#888';
+      tag.textContent = (peer && peer.name) || '?';
+      el.appendChild(dot);
+      el.appendChild(tag);
+      wrap.appendChild(el);
+      c = cursors[id] = { el: el, timer: null };
+    }
+    // 캔버스가 화면 크기에 따라 늘어나므로 위치는 비율(%)로 지정한다
+    c.el.style.left = (x / CW * 100) + '%';
+    c.el.style.top = (y / CH * 100) + '%';
+
+    clearTimeout(c.timer);
+    c.timer = setTimeout(function () { removeCursor(id); }, 6000);
+  }
+
+  // ── 채팅 ────────────────────────────────────────
+  var log = document.getElementById('log');
+  var chatInput = document.getElementById('chatInput');
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function addChat(m) {
+    var atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    var d = new Date(m.ts);
+    var line = document.createElement('div');
+    line.className = 'line';
+
+    var who = document.createElement('div');
+    who.className = 'who';
+    who.style.color = m.color;
+    var nameSpan = document.createElement('span');
+    nameSpan.textContent = m.name + (m.id === me.id ? ' (나)' : '');
+    var time = document.createElement('time');
+    time.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    who.appendChild(nameSpan);
+    who.appendChild(time);
+
+    var body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = m.text;
+
+    line.appendChild(who);
+    line.appendChild(body);
+    log.appendChild(line);
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  function addSys(text) {
+    var line = document.createElement('div');
+    line.className = 'line sys';
+    line.textContent = text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function sendChat() {
+    var text = chatInput.value.trim();
+    if (!text) return;
+    send({ t: 'chat', text: text });
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+  }
+  document.getElementById('sendBtn').addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  chatInput.addEventListener('input', function () {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(90, chatInput.scrollHeight) + 'px';
+  });
+
+  // ── 이름 ────────────────────────────────────────
+  var nameInput = document.getElementById('nameInput');
+  var savedName = '';
+  try { savedName = localStorage.getItem('paint-name') || ''; } catch (e) {}
+  if (savedName) nameInput.value = savedName;
+
+  var nameTimer = null;
+  nameInput.addEventListener('input', function () {
+    clearTimeout(nameTimer);
+    nameTimer = setTimeout(function () {
+      var v = nameInput.value.trim();
+      if (!v) return;
+      try { localStorage.setItem('paint-name', v); } catch (e) {}
+      send({ t: 'hello', name: v });
+    }, 400);
+  });
+
+  // ── 연결 ────────────────────────────────────────
+  var dot = document.getElementById('dot');
+  var statusText = document.getElementById('statusText');
+
+  function setStatus(state, text) {
+    dot.className = 'dot' + (state ? ' ' + state : '');
+    statusText.textContent = text;
+  }
+
+  function send(obj) {
+    if (ws && connected) ws.send(JSON.stringify(obj));
+  }
+
+  var peerMap = {};
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    ws = new WebSocket(proto + location.host);
+
+    ws.onopen = function () {
+      connected = true;
+      setStatus('on', '연결됨');
+    };
+
+    ws.onclose = function () {
+      connected = false;
+      setStatus('off', '연결 끊김 — 다시 연결 중…');
+      Object.keys(cursors).forEach(removeCursor);
+      setTimeout(connect, 1500);
+    };
+
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+
+      switch (m.t) {
+        case 'init':
+          me.id = m.id;
+          me.color = m.color;
+          if (!nameInput.value) nameInput.value = m.name;
+          clearCanvas();
+          for (var i = 0; i < m.history.length; i++) drawSeg(m.history[i]);
+          log.innerHTML = '';
+          m.chat.forEach(addChat);
+          log.scrollTop = log.scrollHeight;
+          m.peers.forEach(function (p) { peerMap[p.id] = p; });
+          renderPeers(m.peers);
+          // 저장해 둔 이름이 있으면 바로 알린다
+          var v = nameInput.value.trim();
+          if (v && v !== m.name) send({ t: 'hello', name: v });
+          break;
+
+        case 'seg':
+          drawSeg(m);
+          break;
+
+        case 'cursor':
+          moveCursor(m.id, m.x, m.y, peerMap[m.id]);
+          break;
+
+        case 'peers':
+          peerMap = {};
+          m.peers.forEach(function (p) { peerMap[p.id] = p; });
+          renderPeers(m.peers);
+          break;
+
+        case 'leave':
+          removeCursor(m.id);
+          break;
+
+        case 'clear':
+          clearCanvas();
+          addSys(m.by + ' 님이 캔버스를 전체 지웠습니다');
+          break;
+
+        case 'chat':
+          addChat(m.msg);
+          break;
+      }
+    };
+  }
+
+  fit();
+  setStatus('', '연결 중…');
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Render 배포 설정
+# 이 폴더(shared-paint)를 GitHub 저장소의 루트로 올린 뒤,
+# Render에서 Blueprint(또는 New Web Service)로 연결하면 이 파일이 자동으로 읽힙니다.
+
+services:
+  - type: web
+    name: shared-paint
+    runtime: node
+    plan: free
+    buildCommand: echo "설치할 의존성 없음"
+    startCommand: node server.js
+    envVars:
+      # 접속 암호 — Render 대시보드에서 직접 값을 입력합니다(코드에 남기지 않음).
+      - key: ROOM_PASSWORD
+        sync: false

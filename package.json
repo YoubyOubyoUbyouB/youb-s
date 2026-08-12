@@ -1,0 +1,13 @@
+{
+  "name": "shared-paint",
+  "version": "1.0.0",
+  "private": true,
+  "description": "여러 명이 함께 그리는 실시간 공유 그림판 (외부 의존성 없음)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
