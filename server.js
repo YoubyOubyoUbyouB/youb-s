@@ -483,6 +483,10 @@ function finishLiar(citizensWin, extra) {
     liarId: liar.liarId,
     liarName: clients.has(liar.liarId) ? clients.get(liar.liarId).name : '(나감)',
     word: liar.word,
+    category: liar.category,
+    fool: liar.fool,
+    decoyWord: liar.decoyWord,
+    decoyCategory: liar.decoyCategory,
     citizensWin,
     counts: [...counts.entries()].map(([id, n]) => ({
       id, n, name: clients.has(id) ? clients.get(id).name : '(나감)',
@@ -547,17 +551,35 @@ function sendLiar(only) {
   for (const c of targets) {
     const isLiar = c.id === liar.liarId;
     const inGame = liar.order.indexOf(c.id) >= 0;
+    const done = liar.phase === 'done';
 
-    // 제시어는 참가 중인 시민에게만. 라이어와 도중 입장자(관전)에게는 숨긴다.
+    // 바보 라이어 모드에서는 라이어 본인에게 "너는 라이어다"라고 알리지 않는다.
+    // 대신 전혀 다른 주제의 엉뚱한 제시어를 주고, 자기가 시민인 줄 알게 둔다.
+    // (지목당해 최후의 기회로 넘어가거나 게임이 끝나면 그때 밝혀진다)
+    const fooled = liar.fool && isLiar && !done && liar.phase !== 'guess';
+
     let word = null;
-    if (liar.phase === 'done') word = liar.word;        // 끝나면 모두에게 공개
-    else if (inGame && !isLiar) word = liar.word;
+    let category = liar.category;
+    let tellIsLiar = isLiar;
 
-    send(c, Object.assign({
-      isLiar, word,
+    if (done) {
+      word = liar.word;                                  // 끝나면 모두에게 공개
+    } else if (fooled) {
+      word = liar.decoyWord;
+      category = liar.decoyCategory;
+      tellIsLiar = false;
+    } else if (inGame && !isLiar) {
+      word = liar.word;
+    }
+
+    send(c, Object.assign({}, base, {
+      category,
+      isLiar: tellIsLiar,
+      word,
+      fool: liar.fool,   // 어떤 모드인지는 공개 정보 (누가 라이어인지와 무관)
       spectator: !inGame,
       myVote: liar.votes.has(c.id) ? liar.votes.get(c.id) : null,
-    }, base));
+    }));
   }
 }
 
@@ -731,19 +753,35 @@ function handle(client, text) {
         }
         const cats = Object.keys(LIAR_TOPICS);
         const category = cats.indexOf(msg.category) >= 0 ? msg.category : pick(cats);
+        const fool = !!msg.fool;
+
+        // 바보 라이어용 미끼 — 반드시 다른 주제에서 뽑는다
+        const otherCats = cats.filter((c) => c !== category);
+        const decoyCategory = pick(otherCats);
 
         liar = {
           phase: 'talk',
+          fool,
           category,
           word: pick(LIAR_TOPICS[category]),
+          decoyCategory,
+          decoyWord: pick(LIAR_TOPICS[decoyCategory]),
           liarId: ids[crypto.randomInt(ids.length)],
           order: shuffleIds(ids),          // 설명하는 순서
           votes: new Map(),
           result: null,
         };
-        broadcast({ t: 'sys', text: `${client.name} 님이 라이어 게임을 시작했습니다 — 주제: ${category} (${ids.length}명)` });
+
+        // 바보 모드에서는 주제를 채팅에 알리지 않는다.
+        // (라이어가 받은 주제와 다르면 자기가 라이어인 걸 바로 알아채기 때문)
+        broadcast({
+          t: 'sys',
+          text: fool
+            ? `${client.name} 님이 라이어 게임을 시작했습니다 — 🤪 바보 라이어 모드 (${ids.length}명) · 주제는 각자 화면에서 확인하세요`
+            : `${client.name} 님이 라이어 게임을 시작했습니다 — 주제: ${category} (${ids.length}명)`,
+        });
         sendLiar();
-        console.log(`[=] 라이어 게임 시작 — 주제 ${category}, ${ids.length}명`);
+        console.log(`[=] 라이어 게임 시작 — 주제 ${category}${fool ? ' (바보 모드)' : ''}, ${ids.length}명`);
         return;
       }
 

@@ -341,6 +341,10 @@
           <option value="사물">사물</option>
           <option value="스포츠">스포츠</option>
         </select>
+        <select id="liarMode">
+          <option value="normal">일반 라이어</option>
+          <option value="fool">🤪 바보 라이어</option>
+        </select>
         <button class="tool" id="liarStart">게임 시작</button>
         <button class="tool" id="liarVoteBtn">투표 시작</button>
         <button class="tool danger" id="liarEnd">종료</button>
@@ -910,7 +914,11 @@
   document.getElementById('liarStart').addEventListener('click', function () {
     if (liarState && liarState.on && liarState.phase !== 'done' &&
         !confirm('진행 중인 판이 있습니다. 새 판으로 다시 시작할까요?')) return;
-    send({ t: 'liar', act: 'start', category: lCat.value });
+    send({
+      t: 'liar', act: 'start',
+      category: lCat.value,
+      fool: document.getElementById('liarMode').value === 'fool',
+    });
   });
   lVoteBtn.addEventListener('click', function () { send({ t: 'liar', act: 'startVote' }); });
   document.getElementById('liarEnd').addEventListener('click', function () {
@@ -943,7 +951,8 @@
 
     // ── 설명 단계
     if (s.phase === 'talk') {
-      phaseLine('설명 단계', ' — 주제: ' + s.category + ' · 채팅으로 한 마디씩 설명하세요');
+      phaseLine('설명 단계', (s.fool ? ' · 🤪 바보 라이어 모드' : '') +
+        ' — 주제: ' + s.category + ' · 채팅으로 한 마디씩 설명하세요');
       lVoteBtn.style.display = '';
 
       var card = el('div', 'card' + (s.isLiar ? ' isliar' : ''));
@@ -1019,7 +1028,9 @@
         input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
         wrapBox.appendChild(input);
         wrapBox.appendChild(btn);
-        lBody.appendChild(el('div', 'turns', '당신이 라이어로 지목됐습니다. 주제는 ' + s.category + ' 입니다.'));
+        lBody.appendChild(el('div', 'turns',
+          (s.fool ? '사실 당신이 라이어였습니다! 받으신 제시어는 가짜였습니다. ' : '') +
+          '당신이 라이어로 지목됐습니다. 진짜 주제는 ' + s.category + ' 입니다.'));
         lBody.appendChild(wrapBox);
         setTimeout(function () { input.focus(); }, 50);
       } else {
@@ -1043,8 +1054,9 @@
         d.appendChild(el('b', null, value));
         d.appendChild(document.createElement('br'));
       }
-      line('라이어는', r.liarName + ' 님');
-      line('제시어는', r.word);
+      line('라이어는', r.liarName + ' 님' + (r.fool ? ' (바보 라이어 — 본인도 몰랐습니다)' : ''));
+      line('진짜 제시어는', r.word + ' (' + r.category + ')');
+      if (r.fool) line('라이어가 받은 가짜 제시어', r.decoyWord + ' (' + r.decoyCategory + ')');
       if (r.guess != null) {
         line('라이어의 추측', r.guess + (r.guessCorrect ? ' (정답!)' : ' (오답)'));
       }
