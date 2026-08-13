@@ -95,6 +95,43 @@
     align-items: center; justify-content: center;
     padding: 14px; background: #0b0d11;
   }
+
+  /* ── 빙고 ─────────────────────────────── */
+  .bingo { display: none; flex-direction: column; align-items: center; gap: 14px;
+           width: 100%; height: 100%; overflow-y: auto; padding: 4px; }
+  .bingo.on { display: flex; }
+
+  .bingo-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .bingo-top select {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  #bingoStatus { font-size: 15px; font-weight: 700; text-align: center; min-height: 22px; }
+  #bingoStatus .hl { color: var(--accent); }
+  #bingoStatus .win { color: #fbbf24; }
+
+  .board { display: grid; gap: 6px; }
+  .board .num {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; font-size: 20px; font-weight: 700; font-family: inherit;
+    display: flex; align-items: center; justify-content: center;
+    aspect-ratio: 1; cursor: default; transition: transform .08s;
+  }
+  .board .num.hit { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .board.myturn .num:not(.hit) { cursor: pointer; }
+  .board.myturn .num:not(.hit):hover { border-color: var(--accent); transform: scale(1.05); }
+
+  .scores { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .scores .s {
+    display: flex; align-items: center; gap: 7px; font-size: 12px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px 5px 9px;
+  }
+  .scores .s.turn { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .scores .s i { width: 9px; height: 9px; border-radius: 50%; }
+  .scores .s em { font-style: normal; font-weight: 700; color: var(--accent); }
+
+  .calledList { font-size: 12px; color: var(--muted); text-align: center; max-width: 460px; line-height: 1.7; }
   .wrap {
     position: relative; background: #fff;
     border-radius: 10px; overflow: hidden;
@@ -184,6 +221,8 @@
 
 <header>
   <div class="brand">🎨 공유 그림판</div>
+  <button class="tool active" id="modePaint">그림판</button>
+  <button class="tool" id="modeBingo">🎲 빙고</button>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
   <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
   <div class="peers" id="peers"></div>
@@ -212,6 +251,28 @@
       <canvas id="board"></canvas>
       <div class="grid" id="grid"></div>
       <div class="brush" id="brush"></div>
+    </div>
+
+    <div class="bingo" id="bingo">
+      <div id="bingoStatus">빙고가 시작되지 않았습니다</div>
+      <div class="bingo-top">
+        <select id="bingoSize">
+          <option value="4">4 × 4</option>
+          <option value="5" selected>5 × 5</option>
+        </select>
+        <select id="bingoGoal">
+          <option value="1">1줄</option>
+          <option value="2">2줄</option>
+          <option value="3" selected>3줄</option>
+          <option value="4">4줄</option>
+          <option value="5">5줄</option>
+        </select>
+        <button class="tool" id="bingoStart">게임 시작</button>
+        <button class="tool danger" id="bingoEnd">종료</button>
+      </div>
+      <div class="board" id="bingoBoard"></div>
+      <div class="scores" id="bingoScores"></div>
+      <div class="calledList" id="bingoCalled"></div>
     </div>
   </div>
 
@@ -631,6 +692,135 @@
     chatInput.style.height = Math.min(90, chatInput.scrollHeight) + 'px';
   });
 
+  // ── 화면 전환 (그림판 / 빙고) ────────────────────
+  var modePaintBtn = document.getElementById('modePaint');
+  var modeBingoBtn = document.getElementById('modeBingo');
+  var bingoEl = document.getElementById('bingo');
+  var toolbarEl = document.querySelector('.toolbar');
+  var mode = 'paint';
+
+  function setMode(m) {
+    mode = m;
+    var paint = m === 'paint';
+    wrap.style.display = paint ? '' : 'none';
+    toolbarEl.style.display = paint ? '' : 'none';
+    bingoEl.classList.toggle('on', !paint);
+    modePaintBtn.classList.toggle('active', paint);
+    modeBingoBtn.classList.toggle('active', !paint);
+    if (paint) fit();
+  }
+  modePaintBtn.addEventListener('click', function () { setMode('paint'); });
+  modeBingoBtn.addEventListener('click', function () { setMode('bingo'); });
+
+  // ── 빙고 ────────────────────────────────────────
+  var bingoState = null;
+  var boardEl = document.getElementById('bingoBoard');
+  var bStatus = document.getElementById('bingoStatus');
+  var bScores = document.getElementById('bingoScores');
+  var bCalled = document.getElementById('bingoCalled');
+  var bSize = document.getElementById('bingoSize');
+  var bGoal = document.getElementById('bingoGoal');
+
+  document.getElementById('bingoStart').addEventListener('click', function () {
+    if (bingoState && bingoState.on && !bingoState.over &&
+        !confirm('진행 중인 빙고가 있습니다. 새 판으로 다시 시작할까요?')) return;
+    send({ t: 'bingo', act: 'start', size: Number(bSize.value), goal: Number(bGoal.value) });
+  });
+
+  document.getElementById('bingoEnd').addEventListener('click', function () {
+    if (confirm('빙고를 종료할까요? 판과 점수가 사라집니다.')) send({ t: 'bingo', act: 'end' });
+  });
+
+  // 판 크기에 따라 고를 수 있는 줄 수가 달라진다 (가로+세로+대각선)
+  function syncGoalOptions() {
+    var max = Number(bSize.value) * 2 + 2;
+    var keep = Number(bGoal.value);
+    bGoal.innerHTML = '';
+    for (var i = 1; i <= max; i++) {
+      var o = document.createElement('option');
+      o.value = i;
+      o.textContent = i + '줄';
+      bGoal.appendChild(o);
+    }
+    bGoal.value = Math.min(keep, max);
+  }
+  bSize.addEventListener('change', syncGoalOptions);
+  syncGoalOptions();
+  bGoal.value = 3;
+
+  function renderBingo() {
+    var s = bingoState;
+    boardEl.innerHTML = '';
+    bScores.innerHTML = '';
+    bStatus.innerHTML = '';
+
+    if (!s || !s.on) {
+      bStatus.textContent = '빙고가 시작되지 않았습니다 — 판 크기와 목표 줄 수를 고르고 게임 시작을 누르세요';
+      bCalled.textContent = '';
+      return;
+    }
+
+    var myTurn = s.turn === me.id && !s.over;
+
+    // 상태 문구
+    if (s.over) {
+      var names = s.winners.map(function (w) { return w.name; }).join(', ');
+      var w1 = document.createElement('span');
+      w1.className = 'win';
+      w1.textContent = '🎉 ' + names;
+      bStatus.appendChild(w1);
+      bStatus.appendChild(document.createTextNode(' 님 빙고! (' + s.goal + '줄 달성)'));
+    } else {
+      var hl = document.createElement('span');
+      hl.className = 'hl';
+      hl.textContent = myTurn ? '내 차례입니다' : s.turnName + ' 님 차례';
+      bStatus.appendChild(hl);
+      bStatus.appendChild(document.createTextNode(
+        myTurn ? ' — 부를 숫자를 고르세요' : ' — 기다리는 중 (' + s.goal + '줄 빙고)'
+      ));
+    }
+
+    // 판
+    boardEl.style.gridTemplateColumns = 'repeat(' + s.size + ', minmax(0, 1fr))';
+    boardEl.style.width = 'min(' + (s.size * 84) + 'px, 62vh, 86vw)';
+    boardEl.classList.toggle('myturn', myTurn);
+
+    var called = {};
+    for (var i = 0; i < s.called.length; i++) called[s.called[i]] = true;
+
+    (s.board || []).forEach(function (n) {
+      var cell = document.createElement('div');
+      cell.className = 'num' + (called[n] ? ' hit' : '');
+      cell.textContent = n;
+      if (!called[n]) {
+        cell.addEventListener('click', function () {
+          if (bingoState && bingoState.turn === me.id && !bingoState.over) {
+            send({ t: 'bingo', act: 'call', n: n });
+          }
+        });
+      }
+      boardEl.appendChild(cell);
+    });
+
+    // 점수판
+    s.players.forEach(function (p) {
+      var el = document.createElement('div');
+      el.className = 's' + (p.id === s.turn && !s.over ? ' turn' : '');
+      var dot = document.createElement('i');
+      dot.style.background = p.color;
+      var em = document.createElement('em');
+      em.textContent = p.lines + '줄';
+      el.appendChild(dot);
+      el.appendChild(document.createTextNode(p.name + (p.id === me.id ? ' (나)' : '') + ' '));
+      el.appendChild(em);
+      bScores.appendChild(el);
+    });
+
+    bCalled.textContent = s.called.length
+      ? '부른 숫자 (' + s.called.length + '개) — ' + s.called.join(', ')
+      : '아직 부른 숫자가 없습니다';
+  }
+
   // ── 이름 ────────────────────────────────────────
   var nameInput = document.getElementById('nameInput');
   var savedName = '';
@@ -743,6 +933,18 @@
 
         case 'chat':
           addChat(m.msg);
+          break;
+
+        case 'sys':
+          addSys(m.text);
+          break;
+
+        case 'bingo':
+          var wasOn = !!(bingoState && bingoState.on);
+          bingoState = m;
+          renderBingo();
+          // 남이 게임을 시작하면 자동으로 빙고 화면으로 넘어간다
+          if (!wasOn && m.on) setMode('bingo');
           break;
       }
     };

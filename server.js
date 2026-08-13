@@ -361,6 +361,90 @@ function pushPeers() {
   broadcast({ t: 'peers', peers: peerList() });
 }
 
+// ─────────────────────────────────────────────── 빙고
+
+let bingo = null;  // { size, boards:Map(id→숫자배열), called, order, turnIdx, goal, over, winners }
+
+/** 1 ~ size² 를 섞은 판 하나. 사람마다 배열이 다르다. */
+function shuffledBoard(size) {
+  const a = [];
+  for (let i = 1; i <= size * size; i++) a.push(i);
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  }
+  return a;
+}
+
+/** 가로·세로·대각선 중 완성된 줄 수 */
+function countLines(board, size, called) {
+  const hit = (r, c) => called.has(board[r * size + c]);
+  let lines = 0;
+
+  for (let r = 0; r < size; r++) {
+    let ok = true;
+    for (let c = 0; c < size; c++) if (!hit(r, c)) { ok = false; break; }
+    if (ok) lines++;
+  }
+  for (let c = 0; c < size; c++) {
+    let ok = true;
+    for (let r = 0; r < size; r++) if (!hit(r, c)) { ok = false; break; }
+    if (ok) lines++;
+  }
+  let d1 = true, d2 = true;
+  for (let i = 0; i < size; i++) {
+    if (!hit(i, i)) d1 = false;
+    if (!hit(i, size - 1 - i)) d2 = false;
+  }
+  if (d1) lines++;
+  if (d2) lines++;
+  return lines;
+}
+
+/** 아직 접속 중인 다음 사람에게 차례를 넘긴다. */
+function advanceTurn() {
+  if (!bingo) return;
+  for (let k = 0; k < bingo.order.length; k++) {
+    bingo.turnIdx = (bingo.turnIdx + 1) % bingo.order.length;
+    if (clients.has(bingo.order[bingo.turnIdx])) return;
+  }
+}
+
+/** 판은 사람마다 다르므로 각자에게 자기 판을 실어 보낸다. */
+function sendBingo(only) {
+  const targets = only ? [only] : [...clients.values()];
+
+  if (!bingo) {
+    for (const c of targets) send(c, { t: 'bingo', on: false });
+    return;
+  }
+
+  const called = new Set(bingo.called);
+  const players = bingo.order
+    .filter((id) => clients.has(id))
+    .map((id) => ({
+      id,
+      name: clients.get(id).name,
+      color: clients.get(id).color,
+      lines: countLines(bingo.boards.get(id), bingo.size, called),
+    }));
+
+  const turnId = bingo.order[bingo.turnIdx];
+  const base = {
+    t: 'bingo', on: true,
+    size: bingo.size, goal: bingo.goal,
+    called: bingo.called,
+    turn: turnId,
+    turnName: clients.has(turnId) ? clients.get(turnId).name : '—',
+    over: bingo.over, winners: bingo.winners,
+    players,
+  };
+
+  for (const c of targets) {
+    send(c, Object.assign({ board: bingo.boards.get(c.id) || null }, base));
+  }
+}
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -400,10 +484,15 @@ server.on('upgrade', (req, socket) => {
 
   const close = () => {
     if (!clients.has(id)) return;
+    const wasTurn = bingo && bingo.order[bingo.turnIdx] === id;
     clients.delete(id);
     socket.destroy();
     broadcast({ t: 'leave', id });
     pushPeers();
+    if (bingo) {
+      if (wasTurn && !bingo.over) advanceTurn();  // 차례인 사람이 나가면 다음으로 넘긴다
+      sendBingo();
+    }
     console.log(`[-] ${client.name} 접속 종료 (현재 ${clients.size}명)`);
   };
 
@@ -419,6 +508,14 @@ server.on('upgrade', (req, socket) => {
     peers: peerList(),
   });
   pushPeers();
+
+  // 게임 중에 들어온 사람에게도 판을 하나 주고 순번 끝에 넣는다
+  if (bingo && !bingo.boards.has(id)) {
+    bingo.boards.set(id, shuffledBoard(bingo.size));
+    bingo.order.push(id);
+  }
+  sendBingo(bingo ? undefined : client);
+
   console.log(`[+] ${client.name} 접속 (현재 ${clients.size}명)`);
 
   socket.on('data', (chunk) => {
@@ -495,6 +592,63 @@ function handle(client, text) {
         if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
       }
       broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
+      return;
+    }
+
+    case 'bingo': {
+      if (msg.act === 'start') {
+        const size = num(msg.size) === 4 ? 4 : 5;
+        const maxLines = size * 2 + 2;
+        const goal = Math.round(clamp(num(msg.goal) ?? 3, 1, maxLines));
+        const ids = [...clients.keys()].sort((a, b) => a - b);
+
+        bingo = { size, goal, boards: new Map(), called: [], order: ids, turnIdx: 0, over: false, winners: [] };
+        for (const id of ids) bingo.boards.set(id, shuffledBoard(size));
+
+        broadcast({ t: 'sys', text: `${client.name} 님이 빙고를 시작했습니다 — ${size}×${size} 판, ${goal}줄 완성하면 승리` });
+        sendBingo();
+        console.log(`[=] ${client.name} 님이 빙고 시작 (${size}x${size}, ${goal}줄, ${ids.length}명)`);
+        return;
+      }
+
+      if (msg.act === 'end') {
+        if (!bingo) return;
+        bingo = null;
+        broadcast({ t: 'sys', text: `${client.name} 님이 빙고를 종료했습니다` });
+        sendBingo();
+        return;
+      }
+
+      if (msg.act === 'call') {
+        if (!bingo || bingo.over) return;
+        if (bingo.order[bingo.turnIdx] !== client.id) return;   // 자기 차례가 아니면 무시
+
+        const n = num(msg.n);
+        const max = bingo.size * bingo.size;
+        if (n === null || n < 1 || n > max || n !== Math.round(n)) return;
+        if (bingo.called.indexOf(n) >= 0) return;
+
+        bingo.called.push(n);
+        broadcast({ t: 'sys', text: `${client.name} 님이 ${n} 을(를) 불렀습니다` });
+
+        const called = new Set(bingo.called);
+        const winners = [];
+        for (const id of bingo.order) {
+          if (!clients.has(id)) continue;
+          const lines = countLines(bingo.boards.get(id), bingo.size, called);
+          if (lines >= bingo.goal) winners.push({ id, name: clients.get(id).name, lines });
+        }
+
+        if (winners.length) {
+          bingo.over = true;
+          bingo.winners = winners;
+          broadcast({ t: 'sys', text: `🎉 ${winners.map((w) => w.name).join(', ')} 님 빙고! (${bingo.goal}줄 달성)` });
+        } else {
+          advanceTurn();
+        }
+        sendBingo();
+        return;
+      }
       return;
     }
 
