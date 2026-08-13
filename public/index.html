@@ -119,6 +119,20 @@
     background: rgba(0,0,0,.75); box-shadow: 0 0 0 1px rgba(255,255,255,.85);
   }
 
+  /* 참여자별 칸 나누기 — 캔버스에 그려지는 게 아니라 위에 덮인 안내선 */
+  .grid { position: absolute; inset: 0; pointer-events: none; display: none; }
+  .grid.on { display: block; }
+  .cell {
+    position: absolute; border: 1px dashed rgba(0,0,0,.3);
+    display: flex; align-items: flex-start; justify-content: flex-start;
+  }
+  .cell.mine { border: 2px solid; }
+  .cell b {
+    font-size: 11px; font-weight: 700; color: #fff; margin: 5px;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+  }
+
   .cursor {
     position: absolute; top: 0; left: 0; pointer-events: none;
     transform: translate(-7px, -7px); transition: left .06s linear, top .06s linear;
@@ -186,6 +200,8 @@
     굵기 <input type="range" id="width" min="1" max="60" value="4"><span id="widthVal">4</span>
   </div>
   <div class="sep"></div>
+  <button class="tool" id="gridBtn" title="참여자 수에 맞춰 칸을 나누고, 각자 자기 칸에만 그립니다">⊞ 칸 나누기</button>
+  <div class="sep"></div>
   <button class="tool" id="undoBtn" title="Ctrl+Z">↶ 실행취소</button>
   <button class="tool danger" id="clearBtn">전체 지우기</button>
 </div>
@@ -194,6 +210,7 @@
   <div class="stage">
     <div class="wrap" id="wrap">
       <canvas id="board"></canvas>
+      <div class="grid" id="grid"></div>
       <div class="brush" id="brush"></div>
     </div>
   </div>
@@ -283,23 +300,24 @@
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) {}
     drawing = true;
     strokeSeq++;                 // 여기서부터 새 획 — 실행취소는 이 단위로 지운다
-    last = toCanvas(ev);
+    last = clampToCell(toCanvas(ev));
     showBrush(ev);
     // 점 하나만 찍는 경우도 보이도록 제자리 선을 하나 긋는다
     emitSeg(last, last);
   });
 
   canvas.addEventListener('pointermove', function (ev) {
-    var p = toCanvas(ev);
+    var raw = toCanvas(ev);
     showBrush(ev);
 
     var now = Date.now();
     if (now - lastCursorSent > 45) {
       lastCursorSent = now;
-      send({ t: 'cursor', x: p.x, y: p.y });
+      send({ t: 'cursor', x: raw.x, y: raw.y });   // 커서는 실제 위치 그대로 알린다
     }
 
     if (!drawing) return;
+    var p = clampToCell(raw);
     emitSeg(last, p);
     last = p;
   });
@@ -433,8 +451,77 @@
   // ── 참여자 / 커서 ───────────────────────────────
   var peersEl = document.getElementById('peers');
   var cursors = {};   // id → {el, timer}
+  var peersArr = [];  // 참여자 목록 (id 오름차순 — 칸 배정 순서와 같다)
+
+  // ── 칸 나누기 ───────────────────────────────────
+  var gridOn = false;
+  var gridEl = document.getElementById('grid');
+  var gridBtn = document.getElementById('gridBtn');
+
+  // 서버와 같은 규칙으로 계산해야 배정이 어긋나지 않는다
+  function layoutFor(n) {
+    var cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+    return { cols: cols, rows: Math.max(1, Math.ceil(n / cols)) };
+  }
+
+  function cellOfIndex(idx, n) {
+    var L = layoutFor(n);
+    var cw = CW / L.cols, ch = CH / L.rows;
+    var cx = idx % L.cols, cy = Math.floor(idx / L.cols);
+    return { x0: cx * cw, y0: cy * ch, x1: (cx + 1) * cw, y1: (cy + 1) * ch };
+  }
+
+  function myCell() {
+    if (!gridOn || me.id == null) return null;
+    for (var i = 0; i < peersArr.length; i++) {
+      if (peersArr[i].id === me.id) return cellOfIndex(i, peersArr.length);
+    }
+    return null;
+  }
+
+  /** 내 칸 밖으로 나가는 점을 칸 경계 안쪽으로 끌어당긴다(붓 굵기만큼 여유). */
+  function clampToCell(p) {
+    var c = myCell();
+    if (!c) return p;
+    var m = width / 2;
+    var x0 = c.x0 + m, x1 = c.x1 - m, y0 = c.y0 + m, y1 = c.y1 - m;
+    if (x0 > x1) x0 = x1 = (c.x0 + c.x1) / 2;
+    if (y0 > y1) y0 = y1 = (c.y0 + c.y1) / 2;
+    return { x: Math.min(x1, Math.max(x0, p.x)), y: Math.min(y1, Math.max(y0, p.y)) };
+  }
+
+  function renderGrid() {
+    gridEl.classList.toggle('on', gridOn);
+    gridEl.innerHTML = '';
+    if (!gridOn) return;
+
+    var n = peersArr.length;
+    for (var i = 0; i < n; i++) {
+      var p = peersArr[i];
+      var c = cellOfIndex(i, n);
+      var el = document.createElement('div');
+      el.className = 'cell' + (p.id === me.id ? ' mine' : '');
+      el.style.left = (c.x0 / CW * 100) + '%';
+      el.style.top = (c.y0 / CH * 100) + '%';
+      el.style.width = ((c.x1 - c.x0) / CW * 100) + '%';
+      el.style.height = ((c.y1 - c.y0) / CH * 100) + '%';
+      if (p.id === me.id) el.style.borderColor = p.color;
+
+      var tag = document.createElement('b');
+      tag.style.background = p.color;
+      tag.textContent = p.name + (p.id === me.id ? ' (나)' : '');
+      el.appendChild(tag);
+      gridEl.appendChild(el);
+    }
+  }
+
+  gridBtn.addEventListener('click', function () {
+    send({ t: 'grid', on: !gridOn });
+  });
 
   function renderPeers(list) {
+    peersArr = list.slice().sort(function (a, b) { return a.id - b.id; });
+    renderGrid();
     peersEl.innerHTML = '';
     list.forEach(function (p) {
       var el = document.createElement('span');
@@ -602,6 +689,8 @@
         case 'init':
           me.id = m.id;
           me.color = m.color;
+          gridOn = !!m.grid;
+          gridBtn.classList.toggle('active', gridOn);
           if (!nameInput.value) nameInput.value = m.name;
           ops = m.history.slice();
           redraw();
@@ -623,6 +712,13 @@
         case 'undo':
           ops = ops.filter(function (o) { return !(o.by === m.by && o.sid === m.sid); });
           redraw();
+          break;
+
+        case 'grid':
+          gridOn = m.on;
+          gridBtn.classList.toggle('active', gridOn);
+          renderGrid();
+          addSys(m.by + ' 님이 칸 나누기를 ' + (gridOn ? '켰습니다' : '껐습니다'));
           break;
 
         case 'cursor':

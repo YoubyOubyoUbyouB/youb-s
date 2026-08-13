@@ -318,6 +318,27 @@ let nextId = 1;
 const clients = new Map(); // id → client
 const history = [];        // 지금까지 그려진 획 조각들
 const chatLog = [];
+let gridOn = false;        // 참여자별 칸 나누기 사용 여부
+
+/** 참여자 수에 맞는 격자 크기. 4명이면 2×2, 5~6명이면 3×2 식으로 나뉜다. */
+function gridLayout(n) {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+  return { cols, rows: Math.max(1, Math.ceil(n / cols)) };
+}
+
+/** 이 사람에게 배정된 칸의 영역. 접속 순서대로 왼쪽 위부터 채운다. */
+function cellOf(clientId) {
+  const ids = [...clients.keys()].sort((a, b) => a - b);
+  const idx = ids.indexOf(clientId);
+  if (idx < 0) return null;
+
+  const { cols, rows } = gridLayout(ids.length);
+  const cw = CANVAS_W / cols;
+  const ch = CANVAS_H / rows;
+  const cx = idx % cols;
+  const cy = Math.floor(idx / cols);
+  return { x0: cx * cw, y0: cy * ch, x1: (cx + 1) * cw, y1: (cy + 1) * ch };
+}
 
 function send(c, obj) {
   if (c.socket.destroyed) return;
@@ -392,6 +413,7 @@ server.on('upgrade', (req, socket) => {
     color: client.color,
     name: client.name,
     canvas: { w: CANVAS_W, h: CANVAS_H },
+    grid: gridOn,
     history,
     chat: chatLog,
     peers: peerList(),
@@ -431,6 +453,17 @@ function handle(client, text) {
       const sid = num(msg.sid);
       if (x0 === null || y0 === null || x1 === null || y1 === null || sid === null) return;
 
+      // 칸 나누기 중이면 자기 칸을 벗어난 획은 받지 않는다
+      if (gridOn) {
+        const cell = cellOf(client.id);
+        const eps = 1;
+        if (!cell ||
+            x0 < cell.x0 - eps || x0 > cell.x1 + eps || y0 < cell.y0 - eps || y0 > cell.y1 + eps ||
+            x1 < cell.x0 - eps || x1 > cell.x1 + eps || y1 < cell.y0 - eps || y1 > cell.y1 + eps) {
+          return;
+        }
+      }
+
       const seg = {
         t: 'seg',
         by: client.id,
@@ -462,6 +495,13 @@ function handle(client, text) {
         if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
       }
       broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
+      return;
+    }
+
+    case 'grid': {
+      gridOn = !!msg.on;
+      broadcast({ t: 'grid', on: gridOn, by: client.name });  // 보낸 사람에게도 전달된다
+      console.log(`[=] ${client.name} 님이 칸 나누기를 ${gridOn ? '켰습니다' : '껐습니다'}`);
       return;
     }
 
