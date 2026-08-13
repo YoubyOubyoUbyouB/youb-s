@@ -132,6 +132,58 @@
   .scores .s em { font-style: normal; font-weight: 700; color: var(--accent); }
 
   .calledList { font-size: 12px; color: var(--muted); text-align: center; max-width: 460px; line-height: 1.7; }
+
+  /* ── 라이어 게임 ──────────────────────── */
+  .liar { display: none; flex-direction: column; align-items: center; gap: 16px;
+          width: 100%; height: 100%; overflow-y: auto; padding: 4px; }
+  .liar.on { display: flex; }
+  .liar-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .liar-top select {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  #liarPhase { font-size: 15px; font-weight: 700; text-align: center; }
+  #liarPhase .hl { color: var(--accent); }
+
+  /* 역할 카드 */
+  .card {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2);
+    padding: 22px 34px; text-align: center; min-width: 260px;
+  }
+  .card .cap { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .card .word { font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
+  .card.isliar { border-color: #b91c1c; background: rgba(185,28,28,.12); }
+  .card.isliar .word { color: #f87171; }
+  .card .sub { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.6; }
+
+  .turns { font-size: 13px; color: var(--muted); text-align: center; line-height: 1.8; max-width: 520px; }
+  .turns b { color: var(--text); }
+
+  .voteList { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 560px; }
+  .voteList button {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 10px 16px; font-size: 13px; font-family: inherit; cursor: pointer;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .voteList button:hover:not(:disabled) { border-color: var(--accent); }
+  .voteList button.picked { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  .voteList button:disabled { opacity: .5; cursor: default; }
+  .voteList button i { width: 9px; height: 9px; border-radius: 50%; }
+  .voteList button .done { font-size: 11px; color: #22c55e; }
+
+  .guessBox { display: flex; gap: 8px; }
+  .guessBox input {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 9px; padding: 10px 13px; font-size: 15px; font-family: inherit; width: 220px;
+  }
+  .guessBox input:focus { outline: none; border-color: var(--accent); }
+
+  .resultBox { text-align: center; }
+  .resultBox .big { font-size: 22px; font-weight: 800; margin-bottom: 10px; }
+  .resultBox .big.citizen { color: #4ade80; }
+  .resultBox .big.liarwin { color: #f87171; }
+  .resultBox .detail { font-size: 13px; color: var(--muted); line-height: 1.9; }
+  .resultBox .detail b { color: var(--text); }
   .wrap {
     position: relative; background: #fff;
     border-radius: 10px; overflow: hidden;
@@ -223,6 +275,7 @@
   <div class="brand">🎨 공유 그림판</div>
   <button class="tool active" id="modePaint">그림판</button>
   <button class="tool" id="modeBingo">🎲 빙고</button>
+  <button class="tool" id="modeLiar">🕵 라이어</button>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
   <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
   <div class="peers" id="peers"></div>
@@ -273,6 +326,26 @@
       <div class="board" id="bingoBoard"></div>
       <div class="scores" id="bingoScores"></div>
       <div class="calledList" id="bingoCalled"></div>
+    </div>
+
+    <div class="liar" id="liar">
+      <div id="liarPhase">라이어 게임이 시작되지 않았습니다</div>
+      <div class="liar-top">
+        <select id="liarCategory">
+          <option value="">주제 랜덤</option>
+          <option value="음식">음식</option>
+          <option value="동물">동물</option>
+          <option value="직업">직업</option>
+          <option value="장소">장소</option>
+          <option value="여행">여행</option>
+          <option value="사물">사물</option>
+          <option value="스포츠">스포츠</option>
+        </select>
+        <button class="tool" id="liarStart">게임 시작</button>
+        <button class="tool" id="liarVoteBtn">투표 시작</button>
+        <button class="tool danger" id="liarEnd">종료</button>
+      </div>
+      <div id="liarBody"></div>
     </div>
   </div>
 
@@ -699,18 +772,24 @@
   var toolbarEl = document.querySelector('.toolbar');
   var mode = 'paint';
 
+  var modeLiarBtn = document.getElementById('modeLiar');
+  var liarEl = document.getElementById('liar');
+
   function setMode(m) {
     mode = m;
     var paint = m === 'paint';
     wrap.style.display = paint ? '' : 'none';
     toolbarEl.style.display = paint ? '' : 'none';
-    bingoEl.classList.toggle('on', !paint);
+    bingoEl.classList.toggle('on', m === 'bingo');
+    liarEl.classList.toggle('on', m === 'liar');
     modePaintBtn.classList.toggle('active', paint);
-    modeBingoBtn.classList.toggle('active', !paint);
+    modeBingoBtn.classList.toggle('active', m === 'bingo');
+    modeLiarBtn.classList.toggle('active', m === 'liar');
     if (paint) fit();
   }
   modePaintBtn.addEventListener('click', function () { setMode('paint'); });
   modeBingoBtn.addEventListener('click', function () { setMode('bingo'); });
+  modeLiarBtn.addEventListener('click', function () { setMode('liar'); });
 
   // ── 빙고 ────────────────────────────────────────
   var bingoState = null;
@@ -819,6 +898,168 @@
     bCalled.textContent = s.called.length
       ? '부른 숫자 (' + s.called.length + '개) — ' + s.called.join(', ')
       : '아직 부른 숫자가 없습니다';
+  }
+
+  // ── 라이어 게임 ─────────────────────────────────
+  var liarState = null;
+  var lPhase = document.getElementById('liarPhase');
+  var lBody = document.getElementById('liarBody');
+  var lCat = document.getElementById('liarCategory');
+  var lVoteBtn = document.getElementById('liarVoteBtn');
+
+  document.getElementById('liarStart').addEventListener('click', function () {
+    if (liarState && liarState.on && liarState.phase !== 'done' &&
+        !confirm('진행 중인 판이 있습니다. 새 판으로 다시 시작할까요?')) return;
+    send({ t: 'liar', act: 'start', category: lCat.value });
+  });
+  lVoteBtn.addEventListener('click', function () { send({ t: 'liar', act: 'startVote' }); });
+  document.getElementById('liarEnd').addEventListener('click', function () {
+    if (confirm('라이어 게임을 종료할까요?')) send({ t: 'liar', act: 'end' });
+  });
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function renderLiar() {
+    var s = liarState;
+    lBody.innerHTML = '';
+    lPhase.innerHTML = '';
+    lVoteBtn.style.display = 'none';
+
+    if (!s || !s.on) {
+      lPhase.textContent = '라이어 게임이 시작되지 않았습니다 — 3명 이상 모이면 시작할 수 있습니다';
+      return;
+    }
+
+    function phaseLine(head, tail) {
+      var h = el('span', 'hl', head);
+      lPhase.appendChild(h);
+      if (tail) lPhase.appendChild(document.createTextNode(tail));
+    }
+
+    // ── 설명 단계
+    if (s.phase === 'talk') {
+      phaseLine('설명 단계', ' — 주제: ' + s.category + ' · 채팅으로 한 마디씩 설명하세요');
+      lVoteBtn.style.display = '';
+
+      var card = el('div', 'card' + (s.isLiar ? ' isliar' : ''));
+      if (s.spectator) {
+        card.appendChild(el('div', 'cap', '관전 중'));
+        card.appendChild(el('div', 'word', '다음 판부터'));
+        card.appendChild(el('div', 'sub', '진행 중에 들어오셔서 이번 판은 참여할 수 없습니다'));
+      } else if (s.isLiar) {
+        card.appendChild(el('div', 'cap', '주제: ' + s.category));
+        card.appendChild(el('div', 'word', '당신이 라이어입니다'));
+        card.appendChild(el('div', 'sub', '제시어를 모릅니다. 다른 사람 설명을 듣고 아는 척하세요'));
+      } else {
+        card.appendChild(el('div', 'cap', '주제: ' + s.category + ' · 제시어'));
+        card.appendChild(el('div', 'word', s.word));
+        card.appendChild(el('div', 'sub', '너무 정확히 설명하면 라이어가 눈치챕니다'));
+      }
+      lBody.appendChild(card);
+
+      var order = el('div', 'turns');
+      order.appendChild(document.createTextNode('설명 순서 — '));
+      s.players.forEach(function (p, i) {
+        if (i) order.appendChild(document.createTextNode(' → '));
+        order.appendChild(el('b', null, p.name + (p.id === me.id ? '(나)' : '')));
+      });
+      lBody.appendChild(order);
+      return;
+    }
+
+    // ── 투표 단계
+    if (s.phase === 'vote') {
+      var votedCount = s.players.filter(function (p) { return p.voted; }).length;
+      phaseLine('투표 중', ' — ' + votedCount + ' / ' + s.players.length + '명 완료');
+
+      var box = el('div', 'voteList');
+      s.players.forEach(function (p) {
+        var b = document.createElement('button');
+        var dot = el('i');
+        dot.style.background = p.color;
+        b.appendChild(dot);
+        b.appendChild(document.createTextNode(p.name + (p.id === me.id ? ' (나)' : '')));
+        if (p.voted) b.appendChild(el('span', 'done', '✓'));
+        if (s.myVote === p.id) b.classList.add('picked');
+
+        var blocked = s.spectator || s.myVote != null || p.id === me.id;
+        b.disabled = blocked;
+        if (!blocked) {
+          b.addEventListener('click', function () { send({ t: 'liar', act: 'vote', target: p.id }); });
+        }
+        box.appendChild(b);
+      });
+      lBody.appendChild(box);
+      lBody.appendChild(el('div', 'turns',
+        s.spectator ? '관전 중이라 투표할 수 없습니다'
+          : s.myVote != null ? '투표했습니다. 나머지를 기다리는 중…'
+          : '라이어라고 생각하는 사람을 고르세요 (자기 자신은 못 고릅니다)'));
+      return;
+    }
+
+    // ── 라이어의 최후 기회
+    if (s.phase === 'guess') {
+      phaseLine('라이어 지목됨', ' — 라이어가 제시어를 맞히면 뒤집힙니다');
+      if (s.isLiar) {
+        var wrapBox = el('div', 'guessBox');
+        var input = document.createElement('input');
+        input.placeholder = '제시어 입력';
+        input.maxLength = 50;
+        var btn = el('button', 'tool', '제출');
+        function submit() {
+          var v = input.value.trim();
+          if (v) send({ t: 'liar', act: 'guess', text: v });
+        }
+        btn.addEventListener('click', submit);
+        input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+        wrapBox.appendChild(input);
+        wrapBox.appendChild(btn);
+        lBody.appendChild(el('div', 'turns', '당신이 라이어로 지목됐습니다. 주제는 ' + s.category + ' 입니다.'));
+        lBody.appendChild(wrapBox);
+        setTimeout(function () { input.focus(); }, 50);
+      } else {
+        lBody.appendChild(el('div', 'turns', '라이어가 제시어를 맞히는 중입니다…'));
+      }
+      return;
+    }
+
+    // ── 결과
+    if (s.phase === 'done' && s.result) {
+      var r = s.result;
+      lPhase.textContent = '결과';
+
+      var box2 = el('div', 'resultBox');
+      box2.appendChild(el('div', 'big ' + (r.citizensWin ? 'citizen' : 'liarwin'),
+        r.citizensWin ? '🔎 시민 승리!' : '🕵 라이어 승리!'));
+
+      var d = el('div', 'detail');
+      function line(label, value) {
+        d.appendChild(document.createTextNode(label + ' '));
+        d.appendChild(el('b', null, value));
+        d.appendChild(document.createElement('br'));
+      }
+      line('라이어는', r.liarName + ' 님');
+      line('제시어는', r.word);
+      if (r.guess != null) {
+        line('라이어의 추측', r.guess + (r.guessCorrect ? ' (정답!)' : ' (오답)'));
+      }
+      if (r.tie) {
+        d.appendChild(document.createTextNode('동점이라 지목에 실패했습니다'));
+        d.appendChild(document.createElement('br'));
+      }
+      if (r.counts && r.counts.length) {
+        d.appendChild(document.createTextNode('득표 — ' +
+          r.counts.map(function (c) { return c.name + ' ' + c.n + '표'; }).join(', ')));
+      }
+      box2.appendChild(d);
+      lBody.appendChild(box2);
+      lBody.appendChild(el('div', 'turns', '게임 시작을 다시 누르면 새 판이 시작됩니다'));
+    }
   }
 
   // ── 이름 ────────────────────────────────────────
@@ -945,6 +1186,13 @@
           renderBingo();
           // 남이 게임을 시작하면 자동으로 빙고 화면으로 넘어간다
           if (!wasOn && m.on) setMode('bingo');
+          break;
+
+        case 'liar':
+          var liarWasOn = !!(liarState && liarState.on);
+          liarState = m;
+          renderLiar();
+          if (!liarWasOn && m.on) setMode('liar');
           break;
       }
     };

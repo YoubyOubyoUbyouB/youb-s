@@ -445,6 +445,122 @@ function sendBingo(only) {
   }
 }
 
+// ─────────────────────────────────────────────── 라이어 게임
+
+const LIAR_TOPICS = {
+  '음식': ['김치찌개', '피자', '치킨', '초밥', '떡볶이', '삼겹살', '짜장면', '비빔밥', '햄버거', '파스타', '냉면', '탕수육', '만두', '라면', '순대'],
+  '동물': ['코끼리', '펭귄', '기린', '호랑이', '고양이', '강아지', '원숭이', '악어', '돌고래', '부엉이', '다람쥐', '캥거루', '낙타', '판다', '거북이'],
+  '직업': ['의사', '교사', '소방관', '요리사', '가수', '운동선수', '경찰', '변호사', '미용사', '사진작가', '승무원', '농부', '기자', '건축가', '수의사'],
+  '장소': ['도서관', '놀이공원', '병원', '영화관', '수영장', '공항', '시장', '카페', '헬스장', '미술관', '주유소', '편의점', '목욕탕', '캠핑장', '동물원'],
+  '여행': ['에펠탑', '만리장성', '피라미드', '나이아가라폭포', '산토리니', '하와이', '오로라', '사파리', '크루즈', '온천', '면세점', '캐리어', '여권', '비행기', '리조트'],
+  '사물': ['우산', '시계', '냉장고', '자전거', '청소기', '거울', '안경', '베개', '가위', '드라이기', '전자레인지', '칫솔', '에어컨', '헬멧', '충전기'],
+  '스포츠': ['축구', '야구', '농구', '수영', '골프', '테니스', '스키', '복싱', '배드민턴', '볼링', '태권도', '양궁', '마라톤', '서핑', '피겨스케이팅'],
+};
+
+let liar = null;  // { phase, category, word, liarId, order, votes:Map, result }
+
+const pick = (arr) => arr[crypto.randomInt(arr.length)];
+const normalize = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+
+function shuffleIds(ids) {
+  const a = ids.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  }
+  return a;
+}
+
+/** 게임을 끝내고 결과를 확정한다. */
+function finishLiar(citizensWin, extra) {
+  const counts = new Map();
+  for (const [voter, target] of liar.votes) {
+    if (!clients.has(voter)) continue;
+    counts.set(target, (counts.get(target) || 0) + 1);
+  }
+  liar.phase = 'done';
+  liar.result = Object.assign({
+    liarId: liar.liarId,
+    liarName: clients.has(liar.liarId) ? clients.get(liar.liarId).name : '(나감)',
+    word: liar.word,
+    citizensWin,
+    counts: [...counts.entries()].map(([id, n]) => ({
+      id, n, name: clients.has(id) ? clients.get(id).name : '(나감)',
+    })).sort((a, b) => b.n - a.n),
+  }, extra || {});
+
+  broadcast({
+    t: 'sys',
+    text: citizensWin
+      ? `🔎 시민 승리! 라이어는 ${liar.result.liarName} 님이었습니다 (제시어: ${liar.word})`
+      : `🕵 라이어 승리! 라이어는 ${liar.result.liarName} 님이었습니다 (제시어: ${liar.word})`,
+  });
+}
+
+/** 모두 투표했으면 개표한다. */
+function tallyLiar() {
+  const voters = liar.order.filter((id) => clients.has(id));
+  if (voters.some((id) => !liar.votes.has(id))) return;   // 아직 안 낸 사람이 있다
+
+  const counts = new Map();
+  for (const [voter, target] of liar.votes) {
+    if (!clients.has(voter)) continue;
+    counts.set(target, (counts.get(target) || 0) + 1);
+  }
+  let top = null, max = 0, tie = false;
+  for (const [id, n] of counts) {
+    if (n > max) { max = n; top = id; tie = false; }
+    else if (n === max) tie = true;
+  }
+
+  if (!tie && top === liar.liarId) {
+    // 라이어가 지목당했다 — 제시어를 맞히면 뒤집을 기회를 준다
+    liar.phase = 'guess';
+    broadcast({ t: 'sys', text: `라이어가 지목됐습니다. 라이어에게 제시어를 맞힐 기회가 주어집니다` });
+  } else {
+    finishLiar(false, { tie, topId: top });
+  }
+}
+
+function sendLiar(only) {
+  const targets = only ? [only] : [...clients.values()];
+
+  if (!liar) {
+    for (const c of targets) send(c, { t: 'liar', on: false });
+    return;
+  }
+
+  const alive = liar.order.filter((id) => clients.has(id));
+  const base = {
+    t: 'liar', on: true,
+    phase: liar.phase,
+    category: liar.category,
+    result: liar.result,
+    players: alive.map((id) => ({
+      id,
+      name: clients.get(id).name,
+      color: clients.get(id).color,
+      voted: liar.votes.has(id),
+    })),
+  };
+
+  for (const c of targets) {
+    const isLiar = c.id === liar.liarId;
+    const inGame = liar.order.indexOf(c.id) >= 0;
+
+    // 제시어는 참가 중인 시민에게만. 라이어와 도중 입장자(관전)에게는 숨긴다.
+    let word = null;
+    if (liar.phase === 'done') word = liar.word;        // 끝나면 모두에게 공개
+    else if (inGame && !isLiar) word = liar.word;
+
+    send(c, Object.assign({
+      isLiar, word,
+      spectator: !inGame,
+      myVote: liar.votes.has(c.id) ? liar.votes.get(c.id) : null,
+    }, base));
+  }
+}
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -493,6 +609,16 @@ server.on('upgrade', (req, socket) => {
       if (wasTurn && !bingo.over) advanceTurn();  // 차례인 사람이 나가면 다음으로 넘긴다
       sendBingo();
     }
+    if (liar) {
+      if (liar.liarId === id && liar.phase !== 'done') {
+        broadcast({ t: 'sys', text: `라이어였던 ${client.name} 님이 나가서 게임을 종료합니다 (제시어: ${liar.word})` });
+        liar = null;
+      } else {
+        liar.votes.delete(id);
+        if (liar.phase === 'vote') tallyLiar();      // 남은 사람만으로 개표가 끝날 수 있다
+      }
+      sendLiar();
+    }
     console.log(`[-] ${client.name} 접속 종료 (현재 ${clients.size}명)`);
   };
 
@@ -515,6 +641,7 @@ server.on('upgrade', (req, socket) => {
     bingo.order.push(id);
   }
   sendBingo(bingo ? undefined : client);
+  sendLiar(liar ? undefined : client);
 
   console.log(`[+] ${client.name} 접속 (현재 ${clients.size}명)`);
 
@@ -592,6 +719,71 @@ function handle(client, text) {
         if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
       }
       broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
+      return;
+    }
+
+    case 'liar': {
+      if (msg.act === 'start') {
+        const ids = [...clients.keys()].sort((a, b) => a - b);
+        if (ids.length < 3) {
+          send(client, { t: 'sys', text: '라이어 게임은 3명 이상이어야 시작할 수 있습니다' });
+          return;
+        }
+        const cats = Object.keys(LIAR_TOPICS);
+        const category = cats.indexOf(msg.category) >= 0 ? msg.category : pick(cats);
+
+        liar = {
+          phase: 'talk',
+          category,
+          word: pick(LIAR_TOPICS[category]),
+          liarId: ids[crypto.randomInt(ids.length)],
+          order: shuffleIds(ids),          // 설명하는 순서
+          votes: new Map(),
+          result: null,
+        };
+        broadcast({ t: 'sys', text: `${client.name} 님이 라이어 게임을 시작했습니다 — 주제: ${category} (${ids.length}명)` });
+        sendLiar();
+        console.log(`[=] 라이어 게임 시작 — 주제 ${category}, ${ids.length}명`);
+        return;
+      }
+
+      if (msg.act === 'startVote') {
+        if (!liar || liar.phase !== 'talk') return;
+        liar.phase = 'vote';
+        liar.votes = new Map();
+        broadcast({ t: 'sys', text: `${client.name} 님이 투표를 시작했습니다 — 라이어라고 생각하는 사람을 지목하세요` });
+        sendLiar();
+        return;
+      }
+
+      if (msg.act === 'vote') {
+        if (!liar || liar.phase !== 'vote') return;
+        const target = num(msg.target);
+        if (target === null || !clients.has(target)) return;
+        if (liar.order.indexOf(client.id) < 0) return;   // 이 판의 참가자가 아니다
+        liar.votes.set(client.id, target);
+        tallyLiar();
+        sendLiar();
+        return;
+      }
+
+      if (msg.act === 'guess') {
+        if (!liar || liar.phase !== 'guess' || client.id !== liar.liarId) return;
+        const raw = String(msg.text || '').trim().slice(0, 50);
+        if (!raw) return;
+        const correct = normalize(raw) === normalize(liar.word);
+        finishLiar(!correct, { guess: raw, guessCorrect: correct });
+        sendLiar();
+        return;
+      }
+
+      if (msg.act === 'end') {
+        if (!liar) return;
+        liar = null;
+        broadcast({ t: 'sys', text: `${client.name} 님이 라이어 게임을 종료했습니다` });
+        sendLiar();
+        return;
+      }
       return;
     }
 
