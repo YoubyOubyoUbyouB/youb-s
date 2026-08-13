@@ -583,6 +583,262 @@ function sendLiar(only) {
   }
 }
 
+// ─────────────────────────────────────────────── 레이싱
+
+// 클라이언트(public/index.html)에도 같은 값이 들어 있다. 한쪽만 고치면 예측이 어긋난다.
+const RC = {
+  N: 24,                 // 트랙 웨이포인트 수 (체크포인트 겸용)
+  halfWidth: 92,         // 도로 반폭
+  maxSpeed: 520,         // 도로 위 최고 속도 (px/s)
+  grassMax: 170,         // 잔디에서의 최고 속도
+  accel: 430,
+  brake: 620,
+  revMax: 180,           // 후진 최고 속도
+  turn: 3.1,             // 조향 각속도 (rad/s)
+  drag: 0.992,
+  grassDrag: 0.90,
+  carR: 15,
+  tickMs: 33,            // 약 30Hz
+  limitMs: 5 * 60 * 1000,
+};
+
+/** 닫힌 순환 코스의 중심선. 살짝 찌그러진 타원이라 코너마다 느낌이 다르다. */
+const TRACK = (() => {
+  const pts = [];
+  for (let i = 0; i < RC.N; i++) {
+    const a = (i / RC.N) * Math.PI * 2;
+    pts.push({
+      x: 800 + 560 * Math.cos(a),
+      y: 450 + 250 * Math.sin(a) + 40 * Math.sin(2 * a),
+    });
+  }
+  return pts;
+})();
+
+function nearestWaypoint(x, y) {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < TRACK.length; i++) {
+    const dx = TRACK[i].x - x, dy = TRACK[i].y - y;
+    const d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  return bi;
+}
+
+/** 중심선까지의 최단 거리. 이 값이 halfWidth를 넘으면 잔디로 나간 것. */
+function distToRoad(x, y) {
+  let best = Infinity;
+  const n = TRACK.length;
+  for (let i = 0; i < n; i++) {
+    const a = TRACK[i], b = TRACK[(i + 1) % n];
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const len2 = vx * vx + vy * vy;
+    let t = len2 ? ((x - a.x) * vx + (y - a.y) * vy) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const d = Math.hypot(x - (a.x + vx * t), y - (a.y + vy * t));
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+let race = null;
+let raceTimer = null;
+
+function raceLoopOn() {
+  if (!raceTimer) raceTimer = setInterval(raceTick, RC.tickMs);
+}
+function raceLoopOff() {
+  if (raceTimer) { clearInterval(raceTimer); raceTimer = null; }
+}
+
+/** 출발 그리드 — 출발선 뒤쪽에 2열로 세운다. */
+function gridSpot(i) {
+  const a = TRACK[0], b = TRACK[1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;   // 진행 방향
+  const nx = -dy, ny = dx;                                 // 좌우 방향
+  const row = Math.floor(i / 2), side = (i % 2) ? 1 : -1;
+  return {
+    x: a.x - dx * (40 + row * 52) + nx * side * 38,
+    y: a.y - dy * (40 + row * 52) + ny * side * 38,
+    a: Math.atan2(dy, dx),
+  };
+}
+
+function stepCar(car, dt) {
+  const inp = car.input;
+  const onRoad = distToRoad(car.x, car.y) <= RC.halfWidth;
+  const top = onRoad ? RC.maxSpeed : RC.grassMax;
+
+  if (inp.u) car.speed += RC.accel * dt;
+  if (inp.d) car.speed -= RC.brake * dt;
+  if (!inp.u && !inp.d) car.speed *= onRoad ? RC.drag : RC.grassDrag;
+  else if (!onRoad) car.speed *= RC.grassDrag;
+
+  if (car.speed > top) car.speed = top;
+  if (car.speed < -RC.revMax) car.speed = -RC.revMax;
+  if (Math.abs(car.speed) < 3) car.speed = 0;
+
+  // 서 있을 때는 방향을 못 바꾼다 (속도에 비례해 조향)
+  const grip = Math.min(1, Math.abs(car.speed) / 140);
+  const dir = car.speed < 0 ? -1 : 1;
+  if (inp.l) car.a -= RC.turn * dt * grip * dir;
+  if (inp.r) car.a += RC.turn * dt * grip * dir;
+
+  car.x += Math.cos(car.a) * car.speed * dt;
+  car.y += Math.sin(car.a) * car.speed * dt;
+
+  // 화면 밖으로는 못 나간다
+  car.x = clamp(car.x, 20, CANVAS_W - 20);
+  car.y = clamp(car.y, 20, CANVAS_H - 20);
+}
+
+/** 체크포인트를 순서대로 통과해야 한 바퀴로 인정된다 (역주행·질러가기 방지). */
+function updateProgress(car, now) {
+  const nw = nearestWaypoint(car.x, car.y);
+  const next = (car.cp + 1) % RC.N;
+  if (nw !== next) return;
+
+  car.cp = next;
+  if (next !== 0) return;
+
+  car.lap++;
+  const t = now - car.lapStart;
+  car.lapTimes.push(t);
+  if (car.best === null || t < car.best) car.best = t;
+  car.lapStart = now;
+
+  if (car.lap >= race.laps) {
+    car.finished = true;
+    car.finishTime = now - race.startAt;
+    race.finishOrder.push(car.id);
+    const c = clients.get(car.id);
+    broadcast({
+      t: 'sys',
+      text: `🏁 ${c ? c.name : '?'} 님 완주 — ${race.finishOrder.length}위 (${(car.finishTime / 1000).toFixed(2)}초)`,
+    });
+  }
+}
+
+function resolveCollisions() {
+  const cars = [...race.cars.values()].filter((c) => clients.has(c.id) && !c.finished);
+  for (let i = 0; i < cars.length; i++) {
+    for (let j = i + 1; j < cars.length; j++) {
+      const a = cars[i], b = cars[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.hypot(dx, dy);
+      const min = RC.carR * 2;
+      if (d === 0 || d >= min) continue;
+      const push = (min - d) / 2;
+      const ux = dx / d, uy = dy / d;
+      a.x -= ux * push; a.y -= uy * push;
+      b.x += ux * push; b.y += uy * push;
+      a.speed *= 0.75; b.speed *= 0.75;
+    }
+  }
+}
+
+function raceRanking() {
+  const list = [...race.cars.values()].filter((c) => clients.has(c.id));
+  list.sort((a, b) => {
+    if (a.finished && b.finished) return a.finishTime - b.finishTime;
+    if (a.finished) return -1;
+    if (b.finished) return 1;
+    return (b.lap * RC.N + b.cp) - (a.lap * RC.N + a.cp);
+  });
+  return list;
+}
+
+function endRace(reason) {
+  race.phase = 'done';
+  race.results = raceRanking().map((c, i) => {
+    const cl = clients.get(c.id);
+    return {
+      id: c.id,
+      name: cl ? cl.name : '(나감)',
+      color: cl ? cl.color : '#888',
+      rank: i + 1,
+      finished: c.finished,
+      time: c.finishTime,
+      best: c.best,
+      lap: c.lap,
+    };
+  });
+  raceLoopOff();
+  broadcast({ t: 'sys', text: reason || '🏁 레이스가 끝났습니다' });
+}
+
+function raceTick() {
+  if (!race) return raceLoopOff();
+  const now = Date.now();
+
+  if (race.phase === 'countdown') {
+    if (now >= race.startAt) {
+      race.phase = 'racing';
+      for (const c of race.cars.values()) c.lapStart = now;
+      broadcast({ t: 'sys', text: '🚦 출발!' });
+    }
+    sendRace();
+    return;
+  }
+
+  if (race.phase !== 'racing') { raceLoopOff(); return; }
+
+  const dt = RC.tickMs / 1000;
+  for (const car of race.cars.values()) {
+    if (car.finished || !clients.has(car.id)) continue;
+    stepCar(car, dt);
+    updateProgress(car, now);
+  }
+  resolveCollisions();
+
+  const active = [...race.cars.values()].filter((c) => clients.has(c.id));
+  if (!active.length) { endRace('참가자가 모두 나가 레이스를 종료합니다'); }
+  else if (active.every((c) => c.finished)) { endRace('🏁 전원 완주!'); }
+  else if (now - race.startAt > RC.limitMs) { endRace('⏱ 제한시간 종료'); }
+
+  sendRace();
+}
+
+function sendRace(only) {
+  const targets = only ? [only] : [...clients.values()];
+
+  if (!race) {
+    for (const c of targets) send(c, { t: 'race', on: false });
+    return;
+  }
+
+  const ranked = raceRanking();
+  const rankOf = new Map(ranked.map((c, i) => [c.id, i + 1]));
+
+  const msg = {
+    t: 'race', on: true,
+    phase: race.phase,
+    laps: race.laps,
+    countdown: race.phase === 'countdown' ? Math.max(0, race.startAt - Date.now()) : 0,
+    elapsed: race.phase === 'racing' ? Date.now() - race.startAt : 0,
+    results: race.results || null,
+    cars: [...race.cars.values()].filter((c) => clients.has(c.id)).map((c) => {
+      const cl = clients.get(c.id);
+      return {
+        i: c.id,
+        n: cl.name,
+        c: cl.color,
+        x: Math.round(c.x * 10) / 10,
+        y: Math.round(c.y * 10) / 10,
+        a: Math.round(c.a * 1000) / 1000,
+        s: Math.round(c.speed),
+        l: c.lap,
+        p: c.cp,
+        r: rankOf.get(c.id) || 0,
+        f: c.finished,
+        b: c.best,
+      };
+    }),
+  };
+  for (const c of targets) send(c, msg);
+}
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -641,6 +897,10 @@ server.on('upgrade', (req, socket) => {
       }
       sendLiar();
     }
+    if (race && race.phase !== 'done' && ![...race.cars.keys()].some((cid) => clients.has(cid))) {
+      endRace('참가자가 모두 나가 레이스를 종료합니다');
+      sendRace();
+    }
     console.log(`[-] ${client.name} 접속 종료 (현재 ${clients.size}명)`);
   };
 
@@ -664,6 +924,7 @@ server.on('upgrade', (req, socket) => {
   }
   sendBingo(bingo ? undefined : client);
   sendLiar(liar ? undefined : client);
+  sendRace(client);   // 진행 중인 레이스는 관전만 (다음 판부터 참여)
 
   console.log(`[+] ${client.name} 접속 (현재 ${clients.size}명)`);
 
@@ -741,6 +1002,59 @@ function handle(client, text) {
         if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
       }
       broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
+      return;
+    }
+
+    case 'race': {
+      if (msg.act === 'start') {
+        const ids = [...clients.keys()].sort((a, b) => a - b);
+        if (ids.length < 1) return;
+
+        const laps = Math.round(clamp(num(msg.laps) ?? 3, 1, 10));
+        const now = Date.now();
+        race = {
+          phase: 'countdown',
+          laps,
+          startAt: now + 3500,
+          cars: new Map(),
+          finishOrder: [],
+          results: null,
+        };
+        ids.forEach((id, i) => {
+          const g = gridSpot(i);
+          race.cars.set(id, {
+            id, x: g.x, y: g.y, a: g.a, speed: 0,
+            lap: 0, cp: 0, lapStart: now, lapTimes: [], best: null,
+            finished: false, finishTime: null,
+            input: { u: false, d: false, l: false, r: false },
+          });
+        });
+
+        broadcast({ t: 'sys', text: `${client.name} 님이 레이스를 시작했습니다 — ${laps}바퀴, ${ids.length}명` });
+        raceLoopOn();
+        sendRace();
+        console.log(`[=] 레이스 시작 — ${laps}바퀴, ${ids.length}명`);
+        return;
+      }
+
+      if (msg.act === 'input') {
+        if (!race || race.phase !== 'racing') return;
+        const car = race.cars.get(client.id);
+        if (!car || car.finished) return;
+        car.input = {
+          u: !!msg.u, d: !!msg.d, l: !!msg.l, r: !!msg.r,
+        };
+        return;
+      }
+
+      if (msg.act === 'end') {
+        if (!race) return;
+        race = null;
+        raceLoopOff();
+        broadcast({ t: 'sys', text: `${client.name} 님이 레이스를 종료했습니다` });
+        sendRace();
+        return;
+      }
       return;
     }
 

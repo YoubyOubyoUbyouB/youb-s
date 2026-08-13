@@ -184,6 +184,37 @@
   .resultBox .big.liarwin { color: #f87171; }
   .resultBox .detail { font-size: 13px; color: var(--muted); line-height: 1.9; }
   .resultBox .detail b { color: var(--text); }
+
+  /* ── 레이싱 ───────────────────────────── */
+  .race { display: none; flex-direction: column; align-items: center; gap: 10px;
+          width: 100%; height: 100%; padding: 2px; }
+  .race.on { display: flex; }
+  .race-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .race-top select {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  .trackWrap { position: relative; border-radius: 10px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  #raceCanvas { display: block; width: 100%; height: 100%; }
+
+  .bigmsg {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; pointer-events: none;
+    font-size: 64px; font-weight: 900; color: #fff; text-shadow: 0 4px 20px rgba(0,0,0,.8);
+  }
+  .bigmsg small { font-size: 16px; font-weight: 600; margin-top: 10px; opacity: .9; }
+
+  .standings { display: flex; gap: 7px; flex-wrap: wrap; justify-content: center; font-size: 12px; }
+  .standings .r {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px 12px 4px 8px;
+  }
+  .standings .r.me { border-color: var(--accent); }
+  .standings .r.fin { opacity: .6; }
+  .standings .r i { width: 9px; height: 9px; border-radius: 50%; }
+  .standings .r em { font-style: normal; color: var(--muted); }
+  .helpKeys { font-size: 12px; color: var(--muted); text-align: center; }
   .wrap {
     position: relative; background: #fff;
     border-radius: 10px; overflow: hidden;
@@ -276,6 +307,7 @@
   <button class="tool active" id="modePaint">그림판</button>
   <button class="tool" id="modeBingo">🎲 빙고</button>
   <button class="tool" id="modeLiar">🕵 라이어</button>
+  <button class="tool" id="modeRace">🏎 레이싱</button>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
   <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
   <div class="peers" id="peers"></div>
@@ -350,6 +382,26 @@
         <button class="tool danger" id="liarEnd">종료</button>
       </div>
       <div id="liarBody"></div>
+    </div>
+
+    <div class="race" id="race">
+      <div class="race-top">
+        <span id="raceStatus">레이스가 시작되지 않았습니다</span>
+        <select id="raceLaps">
+          <option value="1">1바퀴</option>
+          <option value="2">2바퀴</option>
+          <option value="3" selected>3바퀴</option>
+          <option value="5">5바퀴</option>
+        </select>
+        <button class="tool" id="raceStart">레이스 시작</button>
+        <button class="tool danger" id="raceEnd">종료</button>
+      </div>
+      <div class="trackWrap" id="trackWrap">
+        <canvas id="raceCanvas"></canvas>
+        <div class="bigmsg" id="raceBig" style="display:none"></div>
+      </div>
+      <div class="standings" id="raceStandings"></div>
+      <div class="helpKeys">방향키 또는 W A S D — ↑ 가속 · ↓ 브레이크/후진 · ← → 조향 · 잔디로 나가면 느려집니다</div>
     </div>
   </div>
 
@@ -777,7 +829,9 @@
   var mode = 'paint';
 
   var modeLiarBtn = document.getElementById('modeLiar');
+  var modeRaceBtn = document.getElementById('modeRace');
   var liarEl = document.getElementById('liar');
+  var raceEl = document.getElementById('race');
 
   function setMode(m) {
     mode = m;
@@ -786,14 +840,18 @@
     toolbarEl.style.display = paint ? '' : 'none';
     bingoEl.classList.toggle('on', m === 'bingo');
     liarEl.classList.toggle('on', m === 'liar');
+    raceEl.classList.toggle('on', m === 'race');
     modePaintBtn.classList.toggle('active', paint);
     modeBingoBtn.classList.toggle('active', m === 'bingo');
     modeLiarBtn.classList.toggle('active', m === 'liar');
+    modeRaceBtn.classList.toggle('active', m === 'race');
     if (paint) fit();
+    if (m === 'race') { fitTrack(); drawScene(0); }   // 전환 즉시 한 장 그려 둔다
   }
   modePaintBtn.addEventListener('click', function () { setMode('paint'); });
   modeBingoBtn.addEventListener('click', function () { setMode('bingo'); });
   modeLiarBtn.addEventListener('click', function () { setMode('liar'); });
+  modeRaceBtn.addEventListener('click', function () { setMode('race'); });
 
   // ── 빙고 ────────────────────────────────────────
   var bingoState = null;
@@ -1074,6 +1132,345 @@
     }
   }
 
+  // ── 레이싱 ──────────────────────────────────────
+  // ※ 아래 RC / TRACK 값은 server.js 와 반드시 같아야 한다.
+  //    내 차를 로컬에서 미리 굴려(예측) 지연을 감추기 때문에, 한쪽만 바뀌면 차가 튄다.
+  var RC = {
+    N: 24, halfWidth: 92,
+    maxSpeed: 520, grassMax: 170,
+    accel: 430, brake: 620, revMax: 180,
+    turn: 3.1, drag: 0.992, grassDrag: 0.90,
+    carR: 15,
+  };
+
+  var TRACK = (function () {
+    var pts = [];
+    for (var i = 0; i < RC.N; i++) {
+      var a = (i / RC.N) * Math.PI * 2;
+      pts.push({ x: 800 + 560 * Math.cos(a), y: 450 + 250 * Math.sin(a) + 40 * Math.sin(2 * a) });
+    }
+    return pts;
+  })();
+
+  var rCanvas = document.getElementById('raceCanvas');
+  var rc = rCanvas.getContext('2d');
+  rCanvas.width = CW; rCanvas.height = CH;
+  var trackWrap = document.getElementById('trackWrap');
+  var raceBig = document.getElementById('raceBig');
+  var raceStatus = document.getElementById('raceStatus');
+  var raceStand = document.getElementById('raceStandings');
+
+  function fitTrack() {
+    var stage = raceEl.parentElement;
+    var aw = stage.clientWidth - 28;
+    var ah = stage.clientHeight - 155;
+    if (aw <= 0 || ah <= 0) return;
+    var s = Math.min(aw / CW, ah / CH);
+    trackWrap.style.width = Math.max(320, Math.floor(CW * s)) + 'px';
+    trackWrap.style.height = Math.max(180, Math.floor(CH * s)) + 'px';
+  }
+  window.addEventListener('resize', fitTrack);
+
+  var raceState = null;     // 서버가 보내 준 최신 스냅샷
+  var view = {};            // id → 화면에 그릴 위치 (서버 값으로 부드럽게 따라간다)
+  var myCar = null;         // 내 차의 로컬 예측 상태
+  var keys = { u: false, d: false, l: false, r: false };
+  var lastSent = '';
+
+  function distToRoadC(x, y) {
+    var best = Infinity, n = TRACK.length;
+    for (var i = 0; i < n; i++) {
+      var a = TRACK[i], b = TRACK[(i + 1) % n];
+      var vx = b.x - a.x, vy = b.y - a.y;
+      var len2 = vx * vx + vy * vy;
+      var t = len2 ? ((x - a.x) * vx + (y - a.y) * vy) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      var d = Math.hypot(x - (a.x + vx * t), y - (a.y + vy * t));
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  // server.js 의 stepCar 와 동일한 계산
+  function stepLocal(car, dt) {
+    var onRoad = distToRoadC(car.x, car.y) <= RC.halfWidth;
+    var top = onRoad ? RC.maxSpeed : RC.grassMax;
+
+    if (keys.u) car.speed += RC.accel * dt;
+    if (keys.d) car.speed -= RC.brake * dt;
+    if (!keys.u && !keys.d) car.speed *= onRoad ? RC.drag : RC.grassDrag;
+    else if (!onRoad) car.speed *= RC.grassDrag;
+
+    if (car.speed > top) car.speed = top;
+    if (car.speed < -RC.revMax) car.speed = -RC.revMax;
+    if (Math.abs(car.speed) < 3) car.speed = 0;
+
+    var grip = Math.min(1, Math.abs(car.speed) / 140);
+    var dir = car.speed < 0 ? -1 : 1;
+    if (keys.l) car.a -= RC.turn * dt * grip * dir;
+    if (keys.r) car.a += RC.turn * dt * grip * dir;
+
+    car.x += Math.cos(car.a) * car.speed * dt;
+    car.y += Math.sin(car.a) * car.speed * dt;
+    car.x = Math.min(CW - 20, Math.max(20, car.x));
+    car.y = Math.min(CH - 20, Math.max(20, car.y));
+  }
+
+  function angLerp(a, b, t) {
+    var d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+    if (d < -Math.PI) d += Math.PI * 2;
+    return a + d * t;
+  }
+
+  // ── 키 입력
+  var KEYMAP = {
+    ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
+    ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r',
+  };
+  function onKey(e, down) {
+    if (mode !== 'race') return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    var k = KEYMAP[e.code];
+    if (!k) return;
+    e.preventDefault();
+    if (keys[k] === down) return;
+    keys[k] = down;
+    pushInput();
+  }
+  document.addEventListener('keydown', function (e) { onKey(e, true); });
+  document.addEventListener('keyup', function (e) { onKey(e, false); });
+  window.addEventListener('blur', function () {
+    keys = { u: false, d: false, l: false, r: false };
+    pushInput();
+  });
+
+  function pushInput() {
+    var sig = (keys.u ? 1 : 0) + '' + (keys.d ? 1 : 0) + (keys.l ? 1 : 0) + (keys.r ? 1 : 0);
+    if (sig === lastSent) return;
+    lastSent = sig;
+    send({ t: 'race', act: 'input', u: keys.u, d: keys.d, l: keys.l, r: keys.r });
+  }
+
+  document.getElementById('raceStart').addEventListener('click', function () {
+    if (raceState && raceState.on && raceState.phase !== 'done' &&
+        !confirm('진행 중인 레이스가 있습니다. 새로 시작할까요?')) return;
+    send({ t: 'race', act: 'start', laps: Number(document.getElementById('raceLaps').value) });
+  });
+  document.getElementById('raceEnd').addEventListener('click', function () {
+    if (confirm('레이스를 종료할까요?')) send({ t: 'race', act: 'end' });
+  });
+
+  // ── 그리기
+  function drawTrack() {
+    rc.fillStyle = '#16351f';                       // 잔디
+    rc.fillRect(0, 0, CW, CH);
+
+    function path() {
+      rc.beginPath();
+      rc.moveTo(TRACK[0].x, TRACK[0].y);
+      for (var i = 1; i < TRACK.length; i++) rc.lineTo(TRACK[i].x, TRACK[i].y);
+      rc.closePath();
+    }
+    rc.lineJoin = 'round';
+    rc.lineCap = 'round';
+
+    path();
+    rc.strokeStyle = '#0e1116';                     // 도로 테두리
+    rc.lineWidth = RC.halfWidth * 2 + 10;
+    rc.stroke();
+
+    path();
+    rc.strokeStyle = '#3b4149';                     // 도로
+    rc.lineWidth = RC.halfWidth * 2;
+    rc.stroke();
+
+    path();                                         // 가운데 점선
+    rc.setLineDash([26, 24]);
+    rc.strokeStyle = 'rgba(255,255,255,.18)';
+    rc.lineWidth = 3;
+    rc.stroke();
+    rc.setLineDash([]);
+
+    // 출발·결승선 (체크무늬)
+    var a = TRACK[0], b = TRACK[1];
+    var len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    var dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;
+    var nx = -dy, ny = dx;
+    var cells = 10, cw = (RC.halfWidth * 2) / cells;
+    for (var i = 0; i < cells; i++) {
+      for (var j = 0; j < 2; j++) {
+        rc.fillStyle = ((i + j) % 2) ? '#ffffff' : '#22262c';
+        var off = -RC.halfWidth + i * cw;
+        var px = a.x + nx * off + dx * (j * 11 - 11);
+        var py = a.y + ny * off + dy * (j * 11 - 11);
+        rc.save();
+        rc.translate(px, py);
+        rc.rotate(Math.atan2(dy, dx));
+        rc.fillRect(-5.5, 0, 11, cw);
+        rc.restore();
+      }
+    }
+  }
+
+  function drawCar(x, y, ang, color, name, isMe, finished) {
+    rc.save();
+    rc.translate(x, y);
+    rc.rotate(ang);
+    rc.globalAlpha = finished ? 0.45 : 1;
+
+    rc.fillStyle = 'rgba(0,0,0,.35)';               // 그림자
+    rc.fillRect(-15, -9, 32, 20);
+
+    rc.fillStyle = color;                            // 차체
+    rc.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,.6)';
+    rc.lineWidth = isMe ? 2.5 : 1.5;
+    rc.beginPath();
+    rc.rect(-16, -10, 32, 20);
+    rc.fill();
+    rc.stroke();
+
+    rc.fillStyle = 'rgba(255,255,255,.75)';          // 앞유리
+    rc.fillRect(2, -7, 8, 14);
+    rc.restore();
+
+    rc.globalAlpha = finished ? 0.5 : 1;
+    rc.font = 'bold 13px "Malgun Gothic", sans-serif';
+    rc.textAlign = 'center';
+    rc.lineWidth = 3;
+    rc.strokeStyle = 'rgba(0,0,0,.8)';
+    rc.strokeText(name, x, y - 20);
+    rc.fillStyle = '#fff';
+    rc.fillText(name, x, y - 20);
+    rc.globalAlpha = 1;
+  }
+
+  function drawScene(dt) {
+    var s = raceState;
+    drawTrack();
+    if (!s || !s.on) return;
+
+    // 내 차는 로컬에서 계속 굴린다 → 키를 누르면 즉시 반응한다
+    if (dt && myCar && s.phase === 'racing' && !myCar.finished) stepLocal(myCar, dt);
+
+    s.cars.forEach(function (c) {
+      var mine = c.i === me.id;
+      var v = view[c.i];
+      if (!v) v = view[c.i] = { x: c.x, y: c.y, a: c.a };
+
+      if (mine && myCar) {
+        v.x = myCar.x; v.y = myCar.y; v.a = myCar.a;
+      } else {
+        v.x += (c.x - v.x) * Math.min(1, dt * 14);   // 남의 차는 부드럽게 따라간다
+        v.y += (c.y - v.y) * Math.min(1, dt * 14);
+        v.a = angLerp(v.a, c.a, Math.min(1, dt * 14));
+      }
+      drawCar(v.x, v.y, v.a, c.c, c.n, mine, c.f);
+    });
+  }
+
+  var lastFrame = 0;
+  function raceFrame(ts) {
+    requestAnimationFrame(raceFrame);
+    var dt = lastFrame ? Math.min(0.05, (ts - lastFrame) / 1000) : 0;
+    lastFrame = ts;
+    if (mode === 'race') drawScene(dt);
+  }
+  requestAnimationFrame(raceFrame);
+
+  var lastHud = 0;
+
+  /**
+   * 서버가 보내 준 내 차 위치로 로컬 예측을 보정한다.
+   * 내 입력이 서버에 도착하는 데 시간이 걸려서 로컬이 항상 조금 앞서 있는데,
+   * 이걸 매번 강하게 맞추면 차가 뒤로 끌려가 덜컹거린다. 그래서 평소엔 아주 약하게만
+   * 당기고, 충돌 등으로 크게 어긋났을 때만 서버 위치로 붙인다.
+   */
+  function syncMyCar(m) {
+    if (!m.on) { myCar = null; view = {}; return; }
+
+    var srv = null;
+    m.cars.forEach(function (c) { if (c.i === me.id) srv = c; });
+    if (!srv) { myCar = null; return; }
+
+    if (!myCar || m.phase === 'countdown' || srv.f) {
+      myCar = { x: srv.x, y: srv.y, a: srv.a, speed: srv.s, finished: srv.f };
+      return;
+    }
+    myCar.finished = srv.f;
+
+    if (Math.hypot(srv.x - myCar.x, srv.y - myCar.y) > 120) {
+      myCar.x = srv.x; myCar.y = srv.y; myCar.a = srv.a; myCar.speed = srv.s;
+    } else {
+      myCar.x += (srv.x - myCar.x) * 0.06;
+      myCar.y += (srv.y - myCar.y) * 0.06;
+      myCar.a = angLerp(myCar.a, srv.a, 0.06);
+      myCar.speed += (srv.s - myCar.speed) * 0.2;
+    }
+  }
+
+  function fmt(ms) {
+    if (ms == null) return '—';
+    return (ms / 1000).toFixed(2) + '초';
+  }
+
+  function renderRace() {
+    var s = raceState;
+    raceStand.innerHTML = '';
+    raceBig.style.display = 'none';
+
+    if (!s || !s.on) {
+      raceStatus.textContent = '레이스가 시작되지 않았습니다';
+      myCar = null; view = {};
+      return;
+    }
+
+    if (s.phase === 'countdown') {
+      raceStatus.textContent = s.laps + '바퀴 · 곧 출발합니다';
+      raceBig.style.display = '';
+      raceBig.innerHTML = '';
+      raceBig.appendChild(document.createTextNode(String(Math.ceil(s.countdown / 1000) || 'GO!')));
+      var sm = document.createElement('small');
+      sm.textContent = '방향키를 준비하세요';
+      raceBig.appendChild(sm);
+    } else if (s.phase === 'racing') {
+      var mine = null;
+      s.cars.forEach(function (c) { if (c.i === me.id) mine = c; });
+      raceStatus.textContent = mine
+        ? (mine.f ? '완주! 다른 사람을 기다리는 중' : (mine.r + '위 · ' + Math.min(s.laps, mine.l + 1) + ' / ' + s.laps + '바퀴'))
+        : '관전 중 (다음 판부터 참여)';
+    } else if (s.phase === 'done') {
+      raceStatus.textContent = '레이스 종료';
+      raceBig.style.display = '';
+      raceBig.innerHTML = '';
+      raceBig.appendChild(document.createTextNode('🏁'));
+      var sm2 = document.createElement('small');
+      var win = s.results && s.results[0];
+      sm2.textContent = win ? (win.name + ' 님 우승 — ' + fmt(win.time)) : '';
+      raceBig.appendChild(sm2);
+    }
+
+    var rows = (s.phase === 'done' && s.results) ? s.results
+      : s.cars.slice().sort(function (a, b) { return a.r - b.r; }).map(function (c) {
+          return { id: c.i, name: c.n, color: c.c, rank: c.r, lap: c.l, best: c.b, finished: c.f, time: null };
+        });
+
+    rows.forEach(function (p) {
+      var el2 = document.createElement('div');
+      el2.className = 'r' + (p.id === me.id ? ' me' : '') + (p.finished ? ' fin' : '');
+      var dot = document.createElement('i');
+      dot.style.background = p.color;
+      el2.appendChild(dot);
+      el2.appendChild(document.createTextNode(p.rank + '위 ' + p.name + (p.id === me.id ? '(나)' : '') + ' '));
+      var em = document.createElement('em');
+      em.textContent = (s.phase === 'done')
+        ? (p.finished ? fmt(p.time) : p.lap + '바퀴')
+        : (p.lap + '바퀴' + (p.best ? ' · 최고 ' + fmt(p.best) : ''));
+      el2.appendChild(em);
+      raceStand.appendChild(el2);
+    });
+  }
+
   // ── 이름 ────────────────────────────────────────
   var nameInput = document.getElementById('nameInput');
   var savedName = '';
@@ -1205,6 +1602,19 @@
           liarState = m;
           renderLiar();
           if (!liarWasOn && m.on) setMode('liar');
+          break;
+
+        case 'race':
+          var raceWasOn = !!(raceState && raceState.on);
+          var prevPhase = raceState ? raceState.phase : null;
+          raceState = m;
+          syncMyCar(m);
+          // 화면(순위표)은 초당 5번만 갱신 — 캔버스는 별도로 매 프레임 그린다
+          if (m.phase !== prevPhase || Date.now() - lastHud > 200) {
+            lastHud = Date.now();
+            renderRace();
+          }
+          if (!raceWasOn && m.on) { setMode('race'); fitTrack(); }
           break;
       }
     };
