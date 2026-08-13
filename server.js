@@ -587,8 +587,6 @@ function sendLiar(only) {
 
 // 클라이언트(public/index.html)에도 같은 값이 들어 있다. 한쪽만 고치면 예측이 어긋난다.
 const RC = {
-  N: 24,                 // 트랙 웨이포인트 수 (체크포인트 겸용)
-  halfWidth: 92,         // 도로 반폭
   maxSpeed: 520,         // 도로 위 최고 속도 (px/s)
   grassMax: 170,         // 잔디에서의 최고 속도
   accel: 430,
@@ -602,23 +600,45 @@ const RC = {
   limitMs: 5 * 60 * 1000,
 };
 
-/** 닫힌 순환 코스의 중심선. 살짝 찌그러진 타원이라 코너마다 느낌이 다르다. */
-const TRACK = (() => {
+/**
+ * 코스 중심선들. 극좌표 곡선이라 스스로 교차하지 않는 것이 보장된다
+ * (교차하면 체크포인트 판정이 엉킨다).
+ * 트랙 좌표는 레이스 시작 시 클라이언트로 그대로 내려보내므로, 여기만 고치면 된다.
+ */
+function polarTrack(n, base, amp, lobes, ky) {
   const pts = [];
-  for (let i = 0; i < RC.N; i++) {
-    const a = (i / RC.N) * Math.PI * 2;
-    pts.push({
-      x: 800 + 560 * Math.cos(a),
-      y: 450 + 250 * Math.sin(a) + 40 * Math.sin(2 * a),
-    });
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const r = base + amp * Math.cos(lobes * a);
+    pts.push({ x: 800 + r * Math.cos(a), y: 450 + r * ky * Math.sin(a) });
   }
   return pts;
-})();
+}
 
-function nearestWaypoint(x, y) {
+const TRACKS = [
+  {
+    name: '기본 오벌',
+    halfWidth: 92,
+    pts: (() => {
+      const p = [];
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        p.push({ x: 800 + 560 * Math.cos(a), y: 450 + 250 * Math.sin(a) + 40 * Math.sin(2 * a) });
+      }
+      return p;
+    })(),
+  },
+  // 코너 최소반경을 기본 오벌(112px)과 비슷하게 맞췄다. 전속력 회전반경이 168px이라
+  // 이보다 훨씬 조이면 기어가듯 달려야 해서 재미가 없다.
+  { name: '땅콩 코스', halfWidth: 90, pts: polarTrack(28, 530, 55, 2, 0.58) },   // 최소반경 143
+  { name: '물결 서킷', halfWidth: 86, pts: polarTrack(30, 530, 45, 3, 0.56) },   // 최소반경 106
+  { name: '클로버 코스', halfWidth: 86, pts: polarTrack(32, 520, 32, 4, 0.60) },  // 최소반경 103
+];
+
+function nearestWaypoint(track, x, y) {
   let bi = 0, bd = Infinity;
-  for (let i = 0; i < TRACK.length; i++) {
-    const dx = TRACK[i].x - x, dy = TRACK[i].y - y;
+  for (let i = 0; i < track.length; i++) {
+    const dx = track[i].x - x, dy = track[i].y - y;
     const d = dx * dx + dy * dy;
     if (d < bd) { bd = d; bi = i; }
   }
@@ -626,11 +646,11 @@ function nearestWaypoint(x, y) {
 }
 
 /** 중심선까지의 최단 거리. 이 값이 halfWidth를 넘으면 잔디로 나간 것. */
-function distToRoad(x, y) {
+function distToRoad(track, x, y) {
   let best = Infinity;
-  const n = TRACK.length;
+  const n = track.length;
   for (let i = 0; i < n; i++) {
-    const a = TRACK[i], b = TRACK[(i + 1) % n];
+    const a = track[i], b = track[(i + 1) % n];
     const vx = b.x - a.x, vy = b.y - a.y;
     const len2 = vx * vx + vy * vy;
     let t = len2 ? ((x - a.x) * vx + (y - a.y) * vy) / len2 : 0;
@@ -652,8 +672,8 @@ function raceLoopOff() {
 }
 
 /** 출발 그리드 — 출발선 뒤쪽에 2열로 세운다. */
-function gridSpot(i) {
-  const a = TRACK[0], b = TRACK[1];
+function gridSpot(track, i) {
+  const a = track[0], b = track[1];
   const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   const dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;   // 진행 방향
   const nx = -dy, ny = dx;                                 // 좌우 방향
@@ -667,7 +687,7 @@ function gridSpot(i) {
 
 function stepCar(car, dt) {
   const inp = car.input;
-  const onRoad = distToRoad(car.x, car.y) <= RC.halfWidth;
+  const onRoad = distToRoad(race.track, car.x, car.y) <= race.halfWidth;
   const top = onRoad ? RC.maxSpeed : RC.grassMax;
 
   if (inp.u) car.speed += RC.accel * dt;
@@ -695,8 +715,8 @@ function stepCar(car, dt) {
 
 /** 체크포인트를 순서대로 통과해야 한 바퀴로 인정된다 (역주행·질러가기 방지). */
 function updateProgress(car, now) {
-  const nw = nearestWaypoint(car.x, car.y);
-  const next = (car.cp + 1) % RC.N;
+  const nw = nearestWaypoint(race.track, car.x, car.y);
+  const next = (car.cp + 1) % race.track.length;
   if (nw !== next) return;
 
   car.cp = next;
@@ -744,7 +764,8 @@ function raceRanking() {
     if (a.finished && b.finished) return a.finishTime - b.finishTime;
     if (a.finished) return -1;
     if (b.finished) return 1;
-    return (b.lap * RC.N + b.cp) - (a.lap * RC.N + a.cp);
+    const n = race.track.length;
+    return (b.lap * n + b.cp) - (a.lap * n + a.cp);
   });
   return list;
 }
@@ -815,6 +836,7 @@ function sendRace(only) {
     t: 'race', on: true,
     phase: race.phase,
     laps: race.laps,
+    trackName: race.trackName,
     countdown: race.phase === 'countdown' ? Math.max(0, race.startAt - Date.now()) : 0,
     elapsed: race.phase === 'racing' ? Date.now() - race.startAt : 0,
     results: race.results || null,
@@ -836,6 +858,14 @@ function sendRace(only) {
       };
     }),
   };
+
+  // 트랙 좌표는 매 틱 보내면 낭비다. 출발 카운트다운 중이거나 특정 한 명에게 보낼 때만
+  // 실어 보내고, 클라이언트는 받은 것을 계속 들고 쓴다.
+  if (only || race.phase === 'countdown') {
+    msg.track = race.track;
+    msg.halfWidth = race.halfWidth;
+  }
+
   for (const c of targets) send(c, msg);
 }
 
@@ -911,6 +941,7 @@ server.on('upgrade', (req, socket) => {
     name: client.name,
     canvas: { w: CANVAS_W, h: CANVAS_H },
     grid: gridOn,
+    raceTracks: TRACKS.map((t, i) => ({ i, name: t.name })),
     history,
     chat: chatLog,
     peers: peerList(),
@@ -1011,17 +1042,27 @@ function handle(client, text) {
         if (ids.length < 1) return;
 
         const laps = Math.round(clamp(num(msg.laps) ?? 3, 1, 10));
+        const ti = num(msg.track);
+        const pickIdx = (ti !== null && ti >= 0 && ti < TRACKS.length)
+          ? Math.round(ti)
+          : crypto.randomInt(TRACKS.length);          // 범위 밖이거나 미지정이면 랜덤
+        const chosen = TRACKS[pickIdx];
+
         const now = Date.now();
         race = {
           phase: 'countdown',
           laps,
+          trackIdx: pickIdx,
+          trackName: chosen.name,
+          track: chosen.pts,
+          halfWidth: chosen.halfWidth,
           startAt: now + 3500,
           cars: new Map(),
           finishOrder: [],
           results: null,
         };
         ids.forEach((id, i) => {
-          const g = gridSpot(i);
+          const g = gridSpot(race.track, i);
           race.cars.set(id, {
             id, x: g.x, y: g.y, a: g.a, speed: 0,
             lap: 0, cp: 0, lapStart: now, lapTimes: [], best: null,
@@ -1030,10 +1071,10 @@ function handle(client, text) {
           });
         });
 
-        broadcast({ t: 'sys', text: `${client.name} 님이 레이스를 시작했습니다 — ${laps}바퀴, ${ids.length}명` });
+        broadcast({ t: 'sys', text: `${client.name} 님이 레이스를 시작했습니다 — 「${chosen.name}」 ${laps}바퀴, ${ids.length}명` });
         raceLoopOn();
         sendRace();
-        console.log(`[=] 레이스 시작 — ${laps}바퀴, ${ids.length}명`);
+        console.log(`[=] 레이스 시작 — ${chosen.name}, ${laps}바퀴, ${ids.length}명`);
         return;
       }
 

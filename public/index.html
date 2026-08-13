@@ -387,6 +387,7 @@
     <div class="race" id="race">
       <div class="race-top">
         <span id="raceStatus">레이스가 시작되지 않았습니다</span>
+        <select id="raceTrack"><option value="-1">트랙 랜덤</option></select>
         <select id="raceLaps">
           <option value="1">1바퀴</option>
           <option value="2">2바퀴</option>
@@ -1136,21 +1137,15 @@
   // ※ 아래 RC / TRACK 값은 server.js 와 반드시 같아야 한다.
   //    내 차를 로컬에서 미리 굴려(예측) 지연을 감추기 때문에, 한쪽만 바뀌면 차가 튄다.
   var RC = {
-    N: 24, halfWidth: 92,
     maxSpeed: 520, grassMax: 170,
     accel: 430, brake: 620, revMax: 180,
     turn: 3.1, drag: 0.992, grassDrag: 0.90,
     carR: 15,
   };
 
-  var TRACK = (function () {
-    var pts = [];
-    for (var i = 0; i < RC.N; i++) {
-      var a = (i / RC.N) * Math.PI * 2;
-      pts.push({ x: 800 + 560 * Math.cos(a), y: 450 + 250 * Math.sin(a) + 40 * Math.sin(2 * a) });
-    }
-    return pts;
-  })();
+  // 트랙 좌표는 서버가 레이스를 시작할 때 내려준다 (여기서 만들지 않는다)
+  var TRACK = null;
+  var halfWidth = 92;
 
   var rCanvas = document.getElementById('raceCanvas');
   var rc = rCanvas.getContext('2d');
@@ -1178,6 +1173,7 @@
   var lastSent = '';
 
   function distToRoadC(x, y) {
+    if (!TRACK) return 0;
     var best = Infinity, n = TRACK.length;
     for (var i = 0; i < n; i++) {
       var a = TRACK[i], b = TRACK[(i + 1) % n];
@@ -1193,7 +1189,7 @@
 
   // server.js 의 stepCar 와 동일한 계산
   function stepLocal(car, dt) {
-    var onRoad = distToRoadC(car.x, car.y) <= RC.halfWidth;
+    var onRoad = distToRoadC(car.x, car.y) <= halfWidth;
     var top = onRoad ? RC.maxSpeed : RC.grassMax;
 
     if (keys.u) car.speed += RC.accel * dt;
@@ -1245,9 +1241,9 @@
     pushInput();
   });
 
-  function pushInput() {
+  function pushInput(force) {
     var sig = (keys.u ? 1 : 0) + '' + (keys.d ? 1 : 0) + (keys.l ? 1 : 0) + (keys.r ? 1 : 0);
-    if (sig === lastSent) return;
+    if (!force && sig === lastSent) return;
     lastSent = sig;
     send({ t: 'race', act: 'input', u: keys.u, d: keys.d, l: keys.l, r: keys.r });
   }
@@ -1255,7 +1251,11 @@
   document.getElementById('raceStart').addEventListener('click', function () {
     if (raceState && raceState.on && raceState.phase !== 'done' &&
         !confirm('진행 중인 레이스가 있습니다. 새로 시작할까요?')) return;
-    send({ t: 'race', act: 'start', laps: Number(document.getElementById('raceLaps').value) });
+    send({
+      t: 'race', act: 'start',
+      laps: Number(document.getElementById('raceLaps').value),
+      track: Number(document.getElementById('raceTrack').value),   // -1 이면 서버가 랜덤으로 고른다
+    });
   });
   document.getElementById('raceEnd').addEventListener('click', function () {
     if (confirm('레이스를 종료할까요?')) send({ t: 'race', act: 'end' });
@@ -1265,6 +1265,14 @@
   function drawTrack() {
     rc.fillStyle = '#16351f';                       // 잔디
     rc.fillRect(0, 0, CW, CH);
+
+    if (!TRACK) {                                   // 아직 트랙을 받기 전
+      rc.fillStyle = 'rgba(255,255,255,.45)';
+      rc.font = 'bold 26px "Malgun Gothic", sans-serif';
+      rc.textAlign = 'center';
+      rc.fillText('트랙과 바퀴 수를 고르고 레이스 시작을 누르세요', CW / 2, CH / 2);
+      return;
+    }
 
     function path() {
       rc.beginPath();
@@ -1277,12 +1285,12 @@
 
     path();
     rc.strokeStyle = '#0e1116';                     // 도로 테두리
-    rc.lineWidth = RC.halfWidth * 2 + 10;
+    rc.lineWidth = halfWidth * 2 + 10;
     rc.stroke();
 
     path();
     rc.strokeStyle = '#3b4149';                     // 도로
-    rc.lineWidth = RC.halfWidth * 2;
+    rc.lineWidth = halfWidth * 2;
     rc.stroke();
 
     path();                                         // 가운데 점선
@@ -1297,11 +1305,11 @@
     var len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
     var dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;
     var nx = -dy, ny = dx;
-    var cells = 10, cw = (RC.halfWidth * 2) / cells;
+    var cells = 10, cw = (halfWidth * 2) / cells;
     for (var i = 0; i < cells; i++) {
       for (var j = 0; j < 2; j++) {
         rc.fillStyle = ((i + j) % 2) ? '#ffffff' : '#22262c';
-        var off = -RC.halfWidth + i * cw;
+        var off = -halfWidth + i * cw;
         var px = a.x + nx * off + dx * (j * 11 - 11);
         var py = a.y + ny * off + dy * (j * 11 - 11);
         rc.save();
@@ -1387,6 +1395,8 @@
    * 당기고, 충돌 등으로 크게 어긋났을 때만 서버 위치로 붙인다.
    */
   function syncMyCar(m) {
+    // 트랙은 레이스 시작 때만 내려온다. 한 번 받으면 계속 들고 쓴다.
+    if (m.track) { TRACK = m.track; halfWidth = m.halfWidth || 92; }
     if (!m.on) { myCar = null; view = {}; return; }
 
     var srv = null;
@@ -1426,7 +1436,7 @@
     }
 
     if (s.phase === 'countdown') {
-      raceStatus.textContent = s.laps + '바퀴 · 곧 출발합니다';
+      raceStatus.textContent = '「' + s.trackName + '」 ' + s.laps + '바퀴 · 곧 출발합니다';
       raceBig.style.display = '';
       raceBig.innerHTML = '';
       raceBig.appendChild(document.createTextNode(String(Math.ceil(s.countdown / 1000) || 'GO!')));
@@ -1436,9 +1446,9 @@
     } else if (s.phase === 'racing') {
       var mine = null;
       s.cars.forEach(function (c) { if (c.i === me.id) mine = c; });
-      raceStatus.textContent = mine
+      raceStatus.textContent = '「' + s.trackName + '」 ' + (mine
         ? (mine.f ? '완주! 다른 사람을 기다리는 중' : (mine.r + '위 · ' + Math.min(s.laps, mine.l + 1) + ' / ' + s.laps + '바퀴'))
-        : '관전 중 (다음 판부터 참여)';
+        : '관전 중 (다음 판부터 참여)');
     } else if (s.phase === 'done') {
       raceStatus.textContent = '레이스 종료';
       raceBig.style.display = '';
@@ -1531,6 +1541,16 @@
           me.color = m.color;
           gridOn = !!m.grid;
           gridBtn.classList.toggle('active', gridOn);
+          if (m.raceTracks) {
+            var sel = document.getElementById('raceTrack');
+            sel.innerHTML = '<option value="-1">트랙 랜덤</option>';
+            m.raceTracks.forEach(function (tr) {
+              var o = document.createElement('option');
+              o.value = tr.i;
+              o.textContent = tr.name;
+              sel.appendChild(o);
+            });
+          }
           if (!nameInput.value) nameInput.value = m.name;
           ops = m.history.slice();
           redraw();
@@ -1609,6 +1629,11 @@
           var prevPhase = raceState ? raceState.phase : null;
           raceState = m;
           syncMyCar(m);
+          // 새 레이스가 시작되면 서버 쪽 입력이 비워진다. 이미 키를 누르고 있던 사람은
+          // 키 상태가 그대로라 아무것도 안 보내게 되므로, 여기서 한 번 다시 알려 준다.
+          if (m.on && m.phase !== prevPhase && (m.phase === 'countdown' || m.phase === 'racing')) {
+            pushInput(true);
+          }
           // 화면(순위표)은 초당 5번만 갱신 — 캔버스는 별도로 매 프레임 그린다
           if (m.phase !== prevPhase || Date.now() - lastHud > 200) {
             lastHud = Date.now();
