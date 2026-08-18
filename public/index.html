@@ -83,7 +83,12 @@
 
   .sizer { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
   #width { width: 110px; accent-color: var(--accent); }
-  #widthVal { width: 26px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  #widthVal {
+    width: 46px; text-align: center; color: var(--text); font-variant-numeric: tabular-nums;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 2px; font-size: 12px; font-family: inherit;
+  }
+  #widthVal:focus { outline: none; border-color: var(--accent); }
 
   .sep { width: 1px; height: 22px; background: var(--line); }
 
@@ -321,7 +326,7 @@
   <input type="color" id="customColor" value="#111111" title="직접 색 고르기">
   <div class="sep"></div>
   <div class="sizer">
-    굵기 <input type="range" id="width" min="1" max="60" value="4"><span id="widthVal">4</span>
+    굵기 <input type="range" id="width" min="1" max="60" value="4"><input type="number" id="widthVal" min="1" max="60" value="4" title="숫자를 직접 입력할 수 있습니다">
   </div>
   <div class="sep"></div>
   <button class="tool" id="gridBtn" title="참여자 수에 맞춰 칸을 나누고, 각자 자기 칸에만 그립니다">⊞ 칸 나누기</button>
@@ -608,9 +613,13 @@
 
   var widthEl = document.getElementById('width');
   var widthVal = document.getElementById('widthVal');
-  widthEl.addEventListener('input', function () {
-    width = Number(widthEl.value);
-    widthVal.textContent = width;
+  // 슬라이더와 숫자 입력칸 어느 쪽으로도 굵기를 바꿀 수 있다
+  function setWidth(v, fromBox) {
+    v = Math.round(Number(v));
+    if (!isFinite(v)) return;
+    width = Math.min(60, Math.max(1, v));
+    widthEl.value = width;
+    if (!fromBox) widthVal.value = width;   // 입력 중에는 칸을 건드리지 않는다
     // 마우스를 아직 캔버스에 올리지 않았어도 크기를 볼 수 있게 가운데에 띄워 준다
     if (!lastBrushPos) lastBrushPos = { x: CW / 2, y: CH / 2 };
     paintBrush();
@@ -619,6 +628,19 @@
     if (!overCanvas) {
       brushHideTimer = setTimeout(function () { brushEl.classList.remove('on'); }, 1200);
     }
+  }
+
+  widthEl.addEventListener('input', function () { setWidth(widthEl.value); });
+
+  widthVal.addEventListener('input', function () {
+    // 지웠다 다시 쓰는 중일 수 있으니 빈 칸이나 이상한 값은 그냥 둔다
+    if (widthVal.value === '' || !isFinite(Number(widthVal.value))) return;
+    setWidth(widthVal.value, true);
+  });
+  // 다 쓰고 벗어나면 실제 적용된 값으로 정리해 준다 (70을 넣었으면 60으로)
+  widthVal.addEventListener('blur', function () { widthVal.value = width; });
+  widthVal.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); widthVal.blur(); }
   });
 
   document.getElementById('undoBtn').addEventListener('click', function () {
