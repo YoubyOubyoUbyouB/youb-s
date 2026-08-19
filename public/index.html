@@ -70,6 +70,14 @@
   .tool.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tool.danger:hover { background: #b91c1c; border-color: #b91c1c; color: #fff; }
 
+  #shapeTool {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  #shapeTool:focus { outline: none; border-color: var(--accent); }
+  #shapeTool.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
   .swatches { display: flex; gap: 5px; }
   .sw {
     width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
@@ -321,6 +329,15 @@
 <div class="toolbar">
   <button class="tool active" id="penBtn">✏️ 펜</button>
   <button class="tool" id="eraserBtn">🧽 지우개</button>
+  <select id="shapeTool" title="도형을 고른 뒤 캔버스에서 드래그하세요">
+    <option value="">◇ 도형</option>
+    <option value="line">╱ 직선</option>
+    <option value="rect">□ 네모</option>
+    <option value="circle">○ 동그라미</option>
+    <option value="triangle">△ 세모</option>
+    <option value="arrow">➜ 화살표</option>
+    <option value="star">☆ 별</option>
+  </select>
   <div class="sep"></div>
   <div class="swatches" id="swatches"></div>
   <input type="color" id="customColor" value="#111111" title="직접 색 고르기">
@@ -467,6 +484,58 @@
     ctx.restore();
   }
 
+  var SHAPE_TOOLS = { line: true, rect: true, circle: true, triangle: true, arrow: true, star: true };
+
+  function isShapeTool(t) { return !!SHAPE_TOOLS[t]; }
+
+  // 도형도 기존 선분 묶음으로 변환해 동기화와 실행취소 방식을 그대로 사용한다.
+  function shapeSegments(kind, a, b) {
+    var out = [];
+    function add(p, q) { out.push({ x0: p.x, y0: p.y, x1: q.x, y1: q.y }); }
+
+    if (kind === 'line') {
+      add(a, b);
+    } else if (kind === 'rect') {
+      var r1 = { x: b.x, y: a.y }, r2 = { x: a.x, y: b.y };
+      add(a, r1); add(r1, b); add(b, r2); add(r2, a);
+    } else if (kind === 'circle') {
+      var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      var rx = Math.abs(b.x - a.x) / 2, ry = Math.abs(b.y - a.y) / 2;
+      var count = 48, prev = { x: cx + rx, y: cy };
+      for (var i = 1; i <= count; i++) {
+        var ang = i / count * Math.PI * 2;
+        var next = { x: cx + Math.cos(ang) * rx, y: cy + Math.sin(ang) * ry };
+        add(prev, next); prev = next;
+      }
+    } else if (kind === 'triangle') {
+      var top = { x: (a.x + b.x) / 2, y: a.y };
+      var left = { x: a.x, y: b.y }, right = { x: b.x, y: b.y };
+      add(top, right); add(right, left); add(left, top);
+    } else if (kind === 'arrow') {
+      add(a, b);
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var len = Math.hypot(dx, dy) || 1;
+      var head = Math.min(70, Math.max(18, len * 0.28));
+      var angle = Math.atan2(dy, dx), spread = Math.PI / 6;
+      add(b, { x: b.x - Math.cos(angle - spread) * head, y: b.y - Math.sin(angle - spread) * head });
+      add(b, { x: b.x - Math.cos(angle + spread) * head, y: b.y - Math.sin(angle + spread) * head });
+    } else if (kind === 'star') {
+      var scx = (a.x + b.x) / 2, scy = (a.y + b.y) / 2;
+      var srx = Math.abs(b.x - a.x) / 2, sry = Math.abs(b.y - a.y) / 2;
+      var points = [];
+      for (var j = 0; j < 10; j++) {
+        var outer = j % 2 === 0;
+        var sa = -Math.PI / 2 + j * Math.PI / 5;
+        points.push({
+          x: scx + Math.cos(sa) * srx * (outer ? 1 : 0.42),
+          y: scy + Math.sin(sa) * sry * (outer ? 1 : 0.42)
+        });
+      }
+      for (var k = 0; k < points.length; k++) add(points[k], points[(k + 1) % points.length]);
+    }
+    return out;
+  }
+
   function clearCanvas() {
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
@@ -489,7 +558,8 @@
     };
   }
 
-  var drawing = false, last = null, lastCursorSent = 0, strokeSeq = 0;
+  var drawing = false, last = null, shapeStart = null, shapeEnd = null;
+  var lastCursorSent = 0, strokeSeq = 0;
 
   canvas.addEventListener('pointerdown', function (ev) {
     if (ev.button !== 0 && ev.pointerType === 'mouse') return;
@@ -498,6 +568,11 @@
     strokeSeq++;                 // 여기서부터 새 획 — 실행취소는 이 단위로 지운다
     last = clampToCell(toCanvas(ev));
     showBrush(ev);
+    if (isShapeTool(tool)) {
+      shapeStart = last;
+      shapeEnd = last;
+      return;
+    }
     // 점 하나만 찍는 경우도 보이도록 제자리 선을 하나 긋는다
     emitSeg(last, last);
   });
@@ -514,6 +589,18 @@
 
     if (!drawing) return;
     var p = clampToCell(raw);
+    if (isShapeTool(tool)) {
+      shapeEnd = p;
+      redraw();
+      ctx.save();
+      ctx.globalAlpha = 0.72;
+      var preview = shapeSegments(tool, shapeStart, shapeEnd);
+      for (var pi = 0; pi < preview.length; pi++) {
+        drawSeg({ x0: preview[pi].x0, y0: preview[pi].y0, x1: preview[pi].x1, y1: preview[pi].y1, w: width, c: color, e: false });
+      }
+      ctx.restore();
+      return;
+    }
     emitSeg(last, p);
     last = p;
   });
@@ -529,8 +616,14 @@
 
   function stop(ev) {
     if (!drawing) return;
+    if (isShapeTool(tool) && shapeStart) {
+      if (ev && ev.clientX != null && ev.clientY != null) shapeEnd = clampToCell(toCanvas(ev));
+      emitShape(shapeStart, shapeEnd || shapeStart);
+    }
     drawing = false;
     last = null;
+    shapeStart = null;
+    shapeEnd = null;
     try {
       if (ev && ev.pointerId != null && canvas.hasPointerCapture(ev.pointerId)) {
         canvas.releasePointerCapture(ev.pointerId);
@@ -551,6 +644,23 @@
     drawSeg(seg);                                  // 내 화면엔 즉시
     ops.push({ by: me.id, sid: seg.sid, x0: seg.x0, y0: seg.y0, x1: seg.x1, y1: seg.y1, w: seg.w, c: seg.c, e: seg.e });
     send(seg);                                     // 남에게도
+  }
+
+  function emitShape(a, b) {
+    redraw();                                      // 반투명 미리보기를 지운다
+    var pieces = shapeSegments(tool, a, b);
+    for (var i = 0; i < pieces.length; i++) {
+      var p = pieces[i];
+      var seg = {
+        t: 'seg', sid: strokeSeq,
+        x0: Math.round(p.x0 * 10) / 10, y0: Math.round(p.y0 * 10) / 10,
+        x1: Math.round(p.x1 * 10) / 10, y1: Math.round(p.y1 * 10) / 10,
+        w: width, c: color, e: false
+      };
+      drawSeg(seg);
+      ops.push({ by: me.id, sid: seg.sid, x0: seg.x0, y0: seg.y0, x1: seg.x1, y1: seg.y1, w: seg.w, c: seg.c, e: false });
+      send(seg);
+    }
   }
 
   // ── 붓 크기 원 ──────────────────────────────────
@@ -589,7 +699,8 @@
       document.getElementById('customColor').value = c;
       [].forEach.call(swatches.children, function (el) { el.classList.remove('active'); });
       b.classList.add('active');
-      setTool('pen');
+      if (tool === 'eraser') setTool('pen');
+      else paintBrush();
     });
     swatches.appendChild(b);
   });
@@ -597,19 +708,24 @@
   document.getElementById('customColor').addEventListener('input', function (e) {
     color = e.target.value;
     [].forEach.call(swatches.children, function (el) { el.classList.remove('active'); });
-    setTool('pen');
+    if (tool === 'eraser') setTool('pen');
+    else paintBrush();
   });
 
   var penBtn = document.getElementById('penBtn');
   var eraserBtn = document.getElementById('eraserBtn');
+  var shapeToolEl = document.getElementById('shapeTool');
   function setTool(t) {
     tool = t;
     penBtn.classList.toggle('active', t === 'pen');
     eraserBtn.classList.toggle('active', t === 'eraser');
+    shapeToolEl.classList.toggle('active', isShapeTool(t));
+    shapeToolEl.value = isShapeTool(t) ? t : '';
     paintBrush();
   }
   penBtn.addEventListener('click', function () { setTool('pen'); });
   eraserBtn.addEventListener('click', function () { setTool('eraser'); });
+  shapeToolEl.addEventListener('change', function () { setTool(shapeToolEl.value || 'pen'); });
 
   var widthEl = document.getElementById('width');
   var widthVal = document.getElementById('widthVal');
