@@ -936,7 +936,8 @@ const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 const IMG_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
 const MAX_IMG_BYTES = 500 * 1024;   // 한 장 최대 크기
-const MAX_CHAT_IMAGES = 20;         // 메모리에 남겨 둘 이미지 수
+const MAX_CHAT_IMAGES = 12;         // 메모리에 남겨 둘 이미지 수
+const MAX_CHAT_IMAGE_BYTES = 2 * 1024 * 1024;  // 새로 들어온 사람에게 한 번에 보내는 양을 제한
 
 function cleanImage(v) {
   if (typeof v !== "string" || v.length > MAX_IMG_BYTES) return null;
@@ -945,10 +946,12 @@ function cleanImage(v) {
 
 /** 오래된 이미지는 본문만 남기고 버린다 (메모리 보호) */
 function trimChatImages() {
-  let seen = 0;
+  let seen = 0, bytes = 0;
   for (let i = chatLog.length - 1; i >= 0; i--) {
     if (!chatLog[i].image) continue;
-    if (++seen > MAX_CHAT_IMAGES) {
+    seen++;
+    bytes += chatLog[i].image.length;
+    if (seen > MAX_CHAT_IMAGES || bytes > MAX_CHAT_IMAGE_BYTES) {
       delete chatLog[i].image;
       chatLog[i].imageDropped = true;
     }
