@@ -294,7 +294,64 @@
   .line .body { font-size: 13px; line-height: 1.5; word-break: break-word; white-space: pre-wrap; }
   .line.sys { color: var(--muted); font-size: 12px; text-align: center; }
 
-  .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); position: relative; }
+
+  /* 채팅 이미지 */
+  .chatImg {
+    display: block; margin-top: 6px; max-width: 100%; max-height: 150px;
+    border-radius: 8px; border: 1px solid var(--line); cursor: zoom-in;
+  }
+  .chatImg.big { max-height: none; cursor: zoom-out; }
+  .imgGone { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  /* 사진·캡처 버튼 */
+  .chatTools { display: flex; gap: 6px; padding: 8px 10px 0; flex-wrap: wrap; }
+  .chatTool {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 5px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .chatTool:hover { border-color: var(--accent); }
+
+  /* @멘션 */
+  .mtag {
+    background: rgba(79,140,255,.22); color: #9ec1ff; font-weight: 700;
+    border-radius: 5px; padding: 0 3px;
+  }
+  .line.mention { background: rgba(79,140,255,.10); border-left: 3px solid var(--accent);
+    margin-left: -14px; padding-left: 11px; border-radius: 0 6px 6px 0; }
+  .line.mention .mtag { background: rgba(79,140,255,.35); color: #fff; }
+
+  .mentionBox {
+    position: absolute; left: 10px; right: 10px; bottom: 100%; margin-bottom: 6px;
+    background: var(--panel-2); border: 1px solid var(--accent); border-radius: 9px;
+    overflow: hidden; display: none; box-shadow: 0 6px 20px rgba(0,0,0,.45); z-index: 5;
+  }
+  .mentionBox.on { display: block; }
+  .mentionBox button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--text); padding: 7px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .mentionBox button.sel, .mentionBox button:hover { background: var(--accent); color: #fff; }
+
+  /* 빙고 차례 남은 시간 */
+  .turnbar { font-size: 12px; color: var(--muted); min-height: 16px; }
+  .turnbar.warn { color: #f87171; font-weight: 700; }
+
+  /* 빙고 순서 */
+  .orderBox { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; font-size: 12px; }
+  .orderBox .ohead { color: var(--muted); }
+  .orow {
+    display: flex; align-items: center; gap: 5px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 6px 3px 9px;
+  }
+  .orow.turn { border-color: var(--accent); }
+  .orow i { width: 8px; height: 8px; border-radius: 50%; }
+  .orow button {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 0 2px; font-family: inherit;
+  }
+  .orow button:hover { color: var(--accent); }
   #chatInput {
     flex: 1; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit; resize: none;
@@ -349,6 +406,7 @@
   <button class="tool" id="gridBtn" title="참여자 수에 맞춰 칸을 나누고, 각자 자기 칸에만 그립니다">⊞ 칸 나누기</button>
   <div class="sep"></div>
   <button class="tool" id="undoBtn" title="Ctrl+Z">↶ 실행취소</button>
+  <button class="tool danger" id="clearCellBtn" style="display:none">내 칸 지우기</button>
   <button class="tool danger" id="clearBtn">전체 지우기</button>
 </div>
 
@@ -374,11 +432,20 @@
           <option value="4">4줄</option>
           <option value="5">5줄</option>
         </select>
+        <select id="bingoTurn" title="자기 차례에 이 시간이 지나면 무작위로 자동 선택됩니다">
+          <option value="0">제한 없음</option>
+          <option value="10000" selected>10초</option>
+          <option value="15000">15초</option>
+          <option value="20000">20초</option>
+          <option value="30000">30초</option>
+        </select>
         <button class="tool" id="bingoStart">게임 시작</button>
         <button class="tool danger" id="bingoEnd">종료</button>
       </div>
+      <div class="turnbar" id="bingoTimer"></div>
       <div class="board" id="bingoBoard"></div>
       <div class="scores" id="bingoScores"></div>
+      <div class="orderBox" id="bingoOrder"></div>
       <div class="calledList" id="bingoCalled"></div>
     </div>
 
@@ -431,8 +498,15 @@
   <aside class="chat">
     <h2>채팅</h2>
     <div id="log"></div>
+    <div class="chatTools">
+      <button class="chatTool" id="picBtn" title="이미지 파일 첨부 (붙여넣기도 됩니다)">📷 사진</button>
+      <button class="chatTool" id="capBoardBtn" title="지금 그림판 화면을 이미지로 전송">🎨 그림판 캡처</button>
+      <button class="chatTool" id="capScreenBtn" title="화면을 골라 캡처해 전송">🖥 화면 캡처</button>
+      <input type="file" id="picInput" accept="image/*" hidden>
+    </div>
     <div class="composer">
-      <textarea id="chatInput" rows="1" placeholder="메시지 입력 (Enter 전송)" maxlength="500"></textarea>
+      <div class="mentionBox" id="mentionBox"></div>
+      <textarea id="chatInput" rows="1" placeholder="메시지 입력 (Enter 전송 · @로 사람 지목)" maxlength="500"></textarea>
       <button id="sendBtn">전송</button>
     </div>
   </aside>
@@ -771,6 +845,20 @@
     }
   });
 
+  var clearCellBtn = document.getElementById('clearCellBtn');
+  clearCellBtn.addEventListener('click', function () {
+    if (confirm('내 칸에 그려진 것만 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) {
+      send({ t: 'clearCell' });
+    }
+  });
+
+  /** 획 한 조각이 이 칸 안에 들어가는지 (server.js 의 segInCell 과 같은 규칙) */
+  function segInCellC(o, cell) {
+    var e = 1;
+    return o.x0 >= cell.x0 - e && o.x0 <= cell.x1 + e && o.y0 >= cell.y0 - e && o.y0 <= cell.y1 + e &&
+           o.x1 >= cell.x0 - e && o.x1 <= cell.x1 + e && o.y1 >= cell.y0 - e && o.y1 <= cell.y1 + e;
+  }
+
   document.getElementById('clearBtn').addEventListener('click', function () {
     if (confirm('모두의 캔버스를 전부 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) {
       send({ t: 'clear' });
@@ -821,6 +909,7 @@
 
   function renderGrid() {
     gridEl.classList.toggle('on', gridOn);
+    clearCellBtn.style.display = (gridOn && myCell()) ? '' : 'none';
     gridEl.innerHTML = '';
     if (!gridOn) return;
 
@@ -928,12 +1017,58 @@
 
     var body = document.createElement('div');
     body.className = 'body';
-    body.textContent = m.text;
+    body.appendChild(buildChatBody(m.text || ''));
 
     line.appendChild(who);
-    line.appendChild(body);
+    if (m.text) line.appendChild(body);
+
+    if (m.image) {
+      var img = document.createElement('img');
+      img.className = 'chatImg';
+      img.src = m.image;
+      img.title = '클릭하면 크게 보입니다';
+      img.addEventListener('click', function () { img.classList.toggle('big'); });
+      line.appendChild(img);
+    } else if (m.imageDropped) {
+      line.appendChild(el('div', 'imgGone', '(오래된 이미지는 메모리 절약을 위해 지워졌습니다)'));
+    }
+
+    // 나를 지목한 메시지는 눈에 띄게
+    if (m.mentions && m.mentions.indexOf(me.id) >= 0) line.classList.add('mention');
+
     log.appendChild(line);
     if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  /** 본문에서 @이름 을 찾아 강조 표시로 바꾼다 (정규식 대신 직접 훑는다 — 이름에 특수문자가 있어도 안전) */
+  function buildChatBody(text) {
+    var frag = document.createDocumentFragment();
+    var names = peersArr.map(function (x) { return x.name; })
+      .concat(['전체', 'all', 'everyone'])
+      .filter(Boolean)
+      .sort(function (a, b) { return b.length - a.length; });
+
+    var buf = '', i = 0;
+    function flush() { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; } }
+
+    while (i < text.length) {
+      if (text.charAt(i) === '@') {
+        var hit = null;
+        for (var k = 0; k < names.length; k++) {
+          if (text.substr(i + 1, names[k].length) === names[k]) { hit = names[k]; break; }
+        }
+        if (hit) {
+          flush();
+          frag.appendChild(el('span', 'mtag', '@' + hit));
+          i += hit.length + 1;
+          continue;
+        }
+      }
+      buf += text.charAt(i);
+      i++;
+    }
+    flush();
+    return frag;
   }
 
   function addSys(text) {
@@ -944,21 +1079,179 @@
     log.scrollTop = log.scrollHeight;
   }
 
-  function sendChat() {
+  function sendChat(image) {
     var text = chatInput.value.trim();
-    if (!text) return;
-    send({ t: 'chat', text: text });
+    if (!text && !image) return;
+    send({ t: 'chat', text: text, image: image || undefined });
     chatInput.value = '';
     chatInput.style.height = 'auto';
+    hideMentions();
   }
-  document.getElementById('sendBtn').addEventListener('click', sendChat);
+  document.getElementById('sendBtn').addEventListener('click', function () { sendChat(); });
+
+  // ── @ 자동완성 ─────────────────────────────────
+  var mentionBox = document.getElementById('mentionBox');
+  var mentionList = [], mentionAt = -1;
+
+  function mentionQuery() {
+    var v = chatInput.value, pos = chatInput.selectionStart;
+    var upto = v.slice(0, pos);
+    var at = upto.lastIndexOf('@');
+    if (at < 0) return null;
+    var word = upto.slice(at + 1);
+    if (/[\s@]/.test(word)) return null;
+    return { q: word, start: at, end: pos };
+  }
+
+  function hideMentions() { mentionBox.classList.remove('on'); mentionList = []; mentionAt = -1; }
+
+  function showMentions() {
+    var q = mentionQuery();
+    if (!q) { hideMentions(); return; }
+    var lower = q.q.toLowerCase();
+    var names = peersArr.map(function (x) { return x.name; })
+      .concat(['전체'])
+      .filter(function (nm) { return nm && (!lower || nm.toLowerCase().indexOf(lower) === 0); });
+
+    mentionList = names.slice(0, 6);
+    if (!mentionList.length) { hideMentions(); return; }
+    mentionAt = 0;
+    drawMentions();
+  }
+
+  function drawMentions() {
+    mentionBox.innerHTML = '';
+    mentionList.forEach(function (nm, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '@' + nm;
+      if (i === mentionAt) b.className = 'sel';
+      b.addEventListener('mousedown', function (ev) { ev.preventDefault(); applyMention(nm); });
+      mentionBox.appendChild(b);
+    });
+    mentionBox.classList.add('on');
+  }
+
+  function applyMention(nm) {
+    var q = mentionQuery();
+    if (!q) { hideMentions(); return; }
+    var v = chatInput.value;
+    chatInput.value = v.slice(0, q.start) + '@' + nm + ' ' + v.slice(q.end);
+    var caret = q.start + nm.length + 2;
+    chatInput.setSelectionRange(caret, caret);
+    hideMentions();
+    chatInput.focus();
+  }
+
   chatInput.addEventListener('keydown', function (e) {
+    if (mentionBox.classList.contains('on') && mentionList.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); mentionAt = (mentionAt + 1) % mentionList.length; drawMentions(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); mentionAt = (mentionAt - 1 + mentionList.length) % mentionList.length; drawMentions(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyMention(mentionList[mentionAt]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); hideMentions(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  chatInput.addEventListener('blur', function () { setTimeout(hideMentions, 120); });
+
+  // ── 이미지 전송 ────────────────────────────────
+  var MAX_IMG_LEN = 480000;   // 서버 한도(500KB)보다 살짝 낮게
+
+  /** 이미지·캔버스·영상 프레임을 적당한 크기의 JPEG 데이터로 만든다 */
+  function packImage(src, cb) {
+    var w = src.videoWidth || src.naturalWidth || src.width;
+    var h = src.videoHeight || src.naturalHeight || src.height;
+    if (!w || !h) { cb(null); return; }
+
+    var k = Math.min(1, 1000 / Math.max(w, h));
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * k));
+    c.height = Math.max(1, Math.round(h * k));
+    var g = c.getContext('2d');
+    g.fillStyle = '#fff';                      // 투명 배경은 흰색으로 채운다
+    g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(src, 0, 0, c.width, c.height);
+
+    var q = 0.72;
+    var out = c.toDataURL('image/jpeg', q);
+    while (out.length > MAX_IMG_LEN && q > 0.34) {
+      q -= 0.12;
+      out = c.toDataURL('image/jpeg', q);
+    }
+    cb(out.length > MAX_IMG_LEN ? null : out);
+  }
+
+  function sendPacked(src) {
+    packImage(src, function (d) {
+      if (d) sendChat(d);
+      else addSys('이미지가 너무 커서 전송하지 못했습니다');
+    });
+  }
+
+  function sendImageFile(file) {
+    if (!file) return;
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () { sendPacked(img); URL.revokeObjectURL(url); };
+    img.onerror = function () { addSys('이미지를 읽을 수 없습니다'); URL.revokeObjectURL(url); };
+    img.src = url;
+  }
+
+  var picInput = document.getElementById('picInput');
+  document.getElementById('picBtn').addEventListener('click', function () { picInput.click(); });
+  picInput.addEventListener('change', function () {
+    sendImageFile(this.files && this.files[0]);
+    this.value = '';
+  });
+
+  // 붙여넣기로도 보낼 수 있다
+  chatInput.addEventListener('paste', function (e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf('image') === 0) {
+        var f = items[i].getAsFile();
+        if (f) { e.preventDefault(); sendImageFile(f); return; }
+      }
+    }
+  });
+
+  document.getElementById('capBoardBtn').addEventListener('click', function () {
+    sendPacked(canvas);
+  });
+
+  document.getElementById('capScreenBtn').addEventListener('click', function () {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      addSys('이 브라우저에서는 화면 캡처를 쓸 수 없습니다');
+      return;
+    }
+    navigator.mediaDevices.getDisplayMedia({ video: true }).then(function (stream) {
+      var v = document.createElement('video');
+      v.muted = true;
+      v.srcObject = stream;
+      function done() { stream.getTracks().forEach(function (t) { t.stop(); }); }
+      v.onloadedmetadata = function () {
+        v.play().then(function () {
+          // 첫 프레임이 채워질 시간을 조금 준다
+          setTimeout(function () {
+            packImage(v, function (d) {
+              done();
+              if (d) sendChat(d);
+              else addSys('캡처 이미지가 너무 커서 전송하지 못했습니다');
+            });
+          }, 250);
+        }).catch(function () { done(); });
+      };
+    }).catch(function () {
+      addSys('화면 캡처가 취소되었습니다');
+    });
   });
   chatInput.addEventListener('input', function () {
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(90, chatInput.scrollHeight) + 'px';
+    showMentions();
   });
+  chatInput.addEventListener('click', showMentions);
 
   // ── 화면 전환 (그림판 / 빙고) ────────────────────
   var modePaintBtn = document.getElementById('modePaint');
@@ -998,13 +1291,34 @@
   var bStatus = document.getElementById('bingoStatus');
   var bScores = document.getElementById('bingoScores');
   var bCalled = document.getElementById('bingoCalled');
+  var bOrder = document.getElementById('bingoOrder');
+  var bTimer = document.getElementById('bingoTimer');
+  var bingoDeadline = 0;   // 내 시계 기준 차례 마감 시각
+
+  // 남은 시간은 화면에서 매끄럽게 흐르도록 로컬에서 센다
+  setInterval(function () {
+    var s = bingoState;
+    if (!s || !s.on || s.over || !bingoDeadline) {
+      bTimer.textContent = '';
+      bTimer.className = 'turnbar';
+      return;
+    }
+    var left = Math.max(0, bingoDeadline - Date.now());
+    bTimer.textContent = '남은 시간 ' + (left / 1000).toFixed(1) + '초 — 지나면 자동으로 선택됩니다';
+    bTimer.className = 'turnbar' + (left < 3000 ? ' warn' : '');
+  }, 200);
   var bSize = document.getElementById('bingoSize');
   var bGoal = document.getElementById('bingoGoal');
 
   document.getElementById('bingoStart').addEventListener('click', function () {
     if (bingoState && bingoState.on && !bingoState.over &&
         !confirm('진행 중인 빙고가 있습니다. 새 판으로 다시 시작할까요?')) return;
-    send({ t: 'bingo', act: 'start', size: Number(bSize.value), goal: Number(bGoal.value) });
+    send({
+      t: 'bingo', act: 'start',
+      size: Number(bSize.value),
+      goal: Number(bGoal.value),
+      turnMs: Number(document.getElementById('bingoTurn').value),
+    });
   });
 
   document.getElementById('bingoEnd').addEventListener('click', function () {
@@ -1033,6 +1347,7 @@
     boardEl.innerHTML = '';
     bScores.innerHTML = '';
     bStatus.innerHTML = '';
+    bOrder.innerHTML = '';
 
     if (!s || !s.on) {
       bStatus.textContent = '빙고가 시작되지 않았습니다 — 판 크기와 목표 줄 수를 고르고 게임 시작을 누르세요';
@@ -1099,6 +1414,38 @@
     bCalled.textContent = s.called.length
       ? '부른 숫자 (' + s.called.length + '개) — ' + s.called.join(', ')
       : '아직 부른 숫자가 없습니다';
+
+    // 순서 바꾸기 — 누구나 바꿀 수 있고, 차례인 사람은 그대로 유지된다
+    bOrder.appendChild(el('span', 'ohead', '순서'));
+    s.players.forEach(function (p, i) {
+      var row = el('div', 'orow' + (p.id === s.turn && !s.over ? ' turn' : ''));
+      var dot = el('i');
+      dot.style.background = p.color;
+      row.appendChild(dot);
+      row.appendChild(document.createTextNode((i + 1) + '. ' + p.name + (p.id === me.id ? '(나)' : '')));
+
+      var up = el('button', null, '▲');
+      up.title = '앞으로';
+      up.disabled = i === 0;
+      up.addEventListener('click', function () {
+        send({ t: 'bingo', act: 'order', how: 'move', id: p.id, dir: 'up' });
+      });
+      var down = el('button', null, '▼');
+      down.title = '뒤로';
+      down.disabled = i === s.players.length - 1;
+      down.addEventListener('click', function () {
+        send({ t: 'bingo', act: 'order', how: 'move', id: p.id, dir: 'down' });
+      });
+      row.appendChild(up);
+      row.appendChild(down);
+      bOrder.appendChild(row);
+    });
+
+    var mix = el('button', 'tool', '🔀 순서 섞기');
+    mix.addEventListener('click', function () {
+      send({ t: 'bingo', act: 'order', how: 'shuffle' });
+    });
+    bOrder.appendChild(mix);
   }
 
   // ── 라이어 게임 ─────────────────────────────────
@@ -1733,6 +2080,12 @@
           removeCursor(m.id);
           break;
 
+        case 'clearCell':
+          ops = ops.filter(function (o) { return !segInCellC(o, m.cell); });
+          redraw();
+          addSys(m.by + ' 님이 자기 칸을 지웠습니다');
+          break;
+
         case 'clear':
           ops = [];
           clearCanvas();
@@ -1750,6 +2103,7 @@
         case 'bingo':
           var wasOn = !!(bingoState && bingoState.on);
           bingoState = m;
+          bingoDeadline = m.turnLeft ? Date.now() + m.turnLeft : 0;
           renderBingo();
           // 남이 게임을 시작하면 자동으로 빙고 화면으로 넘어간다
           if (!wasOn && m.on) setMode('bingo');

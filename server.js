@@ -326,6 +326,13 @@ function gridLayout(n) {
   return { cols, rows: Math.max(1, Math.ceil(n / cols)) };
 }
 
+/** 획 한 조각이 이 칸 안에 완전히 들어가는지 */
+function segInCell(s, cell) {
+  const e = 1;
+  return s.x0 >= cell.x0 - e && s.x0 <= cell.x1 + e && s.y0 >= cell.y0 - e && s.y0 <= cell.y1 + e &&
+         s.x1 >= cell.x0 - e && s.x1 <= cell.x1 + e && s.y1 >= cell.y0 - e && s.y1 <= cell.y1 + e;
+}
+
 /** 이 사람에게 배정된 칸의 영역. 접속 순서대로 왼쪽 위부터 채운다. */
 function cellOf(clientId) {
   const ids = [...clients.keys()].sort((a, b) => a - b);
@@ -410,6 +417,57 @@ function advanceTurn() {
   }
 }
 
+/** 차례가 넘어갈 때마다 제한시간을 다시 잡는다. turnMs 가 0 이면 제한 없음. */
+function resetTurnDeadline() {
+  if (!bingo) return;
+  bingo.turnDeadline = (bingo.over || !bingo.turnMs) ? 0 : Date.now() + bingo.turnMs;
+}
+
+/** 숫자 하나를 부른다. 사람이 고른 경우와 시간초과 자동 선택이 같은 경로를 쓴다. */
+function bingoCall(callerId, pick, auto) {
+  if (!bingo || bingo.over) return;
+  if (bingo.called.indexOf(pick) >= 0) return;
+
+  const who = clients.has(callerId) ? clients.get(callerId).name : "?";
+  bingo.called.push(pick);
+  broadcast({ t: "sys", text: `${who} 님이 ${pick} 을(를) 불렀습니다${auto ? " (시간 초과 — 자동 선택)" : ""}` });
+
+  const called = new Set(bingo.called);
+  const winners = [];
+  for (const pid of bingo.order) {
+    if (!clients.has(pid)) continue;
+    const lines = countLines(bingo.boards.get(pid), bingo.size, called);
+    if (lines >= bingo.goal) winners.push({ id: pid, name: clients.get(pid).name, lines });
+  }
+
+  if (winners.length) {
+    bingo.over = true;
+    bingo.winners = winners;
+    bingo.turnDeadline = 0;
+    broadcast({ t: "sys", text: `🎉 ${winners.map((w) => w.name).join(", ")} 님 빙고! (${bingo.goal}줄 달성)` });
+  } else {
+    advanceTurn();
+    resetTurnDeadline();
+  }
+}
+
+// 제한시간이 지나면 그 사람 판에서 아직 안 나온 숫자를 무작위로 부른다.
+setInterval(() => {
+  if (!bingo || bingo.over || !bingo.turnDeadline) return;
+  if (Date.now() < bingo.turnDeadline) return;
+
+  const id = bingo.order[bingo.turnIdx];
+  const board = bingo.boards.get(id);
+  if (!clients.has(id) || !board) { advanceTurn(); resetTurnDeadline(); sendBingo(); return; }
+
+  const called = new Set(bingo.called);
+  const free = board.filter((v) => !called.has(v));
+  if (!free.length) { advanceTurn(); resetTurnDeadline(); sendBingo(); return; }
+
+  bingoCall(id, free[crypto.randomInt(free.length)], true);
+  sendBingo();
+}, 500).unref();
+
 /** 판은 사람마다 다르므로 각자에게 자기 판을 실어 보낸다. */
 function sendBingo(only) {
   const targets = only ? [only] : [...clients.values()];
@@ -437,6 +495,9 @@ function sendBingo(only) {
     turn: turnId,
     turnName: clients.has(turnId) ? clients.get(turnId).name : '—',
     over: bingo.over, winners: bingo.winners,
+    turnMs: bingo.turnMs,
+    // 기기 시계가 서로 다를 수 있으니 남은 시간(ms)만 보낸다
+    turnLeft: bingo.turnDeadline ? Math.max(0, bingo.turnDeadline - Date.now()) : 0,
     players,
   };
 
@@ -873,6 +934,27 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
+const IMG_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+const MAX_IMG_BYTES = 500 * 1024;   // 한 장 최대 크기
+const MAX_CHAT_IMAGES = 20;         // 메모리에 남겨 둘 이미지 수
+
+function cleanImage(v) {
+  if (typeof v !== "string" || v.length > MAX_IMG_BYTES) return null;
+  return IMG_RE.test(v) ? v : null;
+}
+
+/** 오래된 이미지는 본문만 남기고 버린다 (메모리 보호) */
+function trimChatImages() {
+  let seen = 0;
+  for (let i = chatLog.length - 1; i >= 0; i--) {
+    if (!chatLog[i].image) continue;
+    if (++seen > MAX_CHAT_IMAGES) {
+      delete chatLog[i].image;
+      chatLog[i].imageDropped = true;
+    }
+  }
+}
+
 function cleanName(v) {
   return String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
 }
@@ -915,6 +997,7 @@ server.on('upgrade', (req, socket) => {
     pushPeers();
     if (bingo) {
       if (wasTurn && !bingo.over) advanceTurn();  // 차례인 사람이 나가면 다음으로 넘긴다
+      resetTurnDeadline();
       sendBingo();
     }
     if (liar) {
@@ -1187,8 +1270,15 @@ function handle(client, text) {
         const goal = Math.round(clamp(num(msg.goal) ?? 3, 1, maxLines));
         const ids = [...clients.keys()].sort((a, b) => a - b);
 
-        bingo = { size, goal, boards: new Map(), called: [], order: ids, turnIdx: 0, over: false, winners: [] };
+        // 0 이면 제한 없음
+        const turnMs = Math.round(clamp(num(msg.turnMs) ?? 10000, 0, 120000));
+
+        bingo = {
+          size, goal, turnMs, turnDeadline: 0,
+          boards: new Map(), called: [], order: ids, turnIdx: 0, over: false, winners: [],
+        };
         for (const id of ids) bingo.boards.set(id, shuffledBoard(size));
+        resetTurnDeadline();
 
         broadcast({ t: 'sys', text: `${client.name} 님이 빙고를 시작했습니다 — ${size}×${size} 판, ${goal}줄 완성하면 승리` });
         sendBingo();
@@ -1211,26 +1301,29 @@ function handle(client, text) {
         const n = num(msg.n);
         const max = bingo.size * bingo.size;
         if (n === null || n < 1 || n > max || n !== Math.round(n)) return;
-        if (bingo.called.indexOf(n) >= 0) return;
 
-        bingo.called.push(n);
-        broadcast({ t: 'sys', text: `${client.name} 님이 ${n} 을(를) 불렀습니다` });
+        bingoCall(client.id, n, false);
+        sendBingo();
+        return;
+      }
 
-        const called = new Set(bingo.called);
-        const winners = [];
-        for (const id of bingo.order) {
-          if (!clients.has(id)) continue;
-          const lines = countLines(bingo.boards.get(id), bingo.size, called);
-          if (lines >= bingo.goal) winners.push({ id, name: clients.get(id).name, lines });
-        }
+      if (msg.act === 'order') {
+        if (!bingo) return;
+        const keep = bingo.order[bingo.turnIdx];   // 차례인 사람은 그대로 유지한다
 
-        if (winners.length) {
-          bingo.over = true;
-          bingo.winners = winners;
-          broadcast({ t: 'sys', text: `🎉 ${winners.map((w) => w.name).join(', ')} 님 빙고! (${bingo.goal}줄 달성)` });
-        } else {
-          advanceTurn();
-        }
+        if (msg.how === 'shuffle') {
+          bingo.order = shuffleIds(bingo.order);
+        } else if (msg.how === 'move') {
+          const who = num(msg.id);
+          const i = bingo.order.indexOf(who);
+          const j = i + (msg.dir === 'up' ? -1 : 1);
+          if (i < 0 || j < 0 || j >= bingo.order.length) return;
+          const tmp = bingo.order[i]; bingo.order[i] = bingo.order[j]; bingo.order[j] = tmp;
+        } else return;
+
+        const at = bingo.order.indexOf(keep);
+        if (at >= 0) bingo.turnIdx = at;
+        broadcast({ t: "sys", text: `${client.name} 님이 빙고 순서를 바꿨습니다` });
         sendBingo();
         return;
       }
@@ -1251,6 +1344,19 @@ function handle(client, text) {
       return;
     }
 
+    case 'clearCell': {
+      // 칸 나누기 중일 때, 자기 칸 안에 있는 획만 지운다
+      if (!gridOn) return;
+      const myArea = cellOf(client.id);
+      if (!myArea) return;
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (segInCell(history[i], myArea)) history.splice(i, 1);
+      }
+      broadcast({ t: "clearCell", cell: myArea, by: client.name });  // 보낸 사람에게도 전달된다
+      console.log(`[!] ${client.name} 님이 자기 칸을 지웠습니다`);
+      return;
+    }
+
     case 'clear': {
       history.length = 0;
       broadcast({ t: 'clear', by: client.name });  // 보낸 사람에게도 전달된다
@@ -1260,16 +1366,28 @@ function handle(client, text) {
 
     case 'chat': {
       const body = String(msg.text ?? '').trim().slice(0, 500);
-      if (!body) return;
+      const image = cleanImage(msg.image);
+      if (!body && !image) return;
+
+      // @이름 / @전체 를 찾아 지목된 사람 목록을 만든다 (이름 비교는 서버가 한다)
+      const mentions = [];
+      const toAll = /(^|\s)@(전체|all|everyone)(\s|$)/i.test(body);
+      for (const c of clients.values()) {
+        if (toAll || (c.name && body.indexOf("@" + c.name) >= 0)) mentions.push(c.id);
+      }
+
       const entry = {
         id: client.id,
         name: client.name,
         color: client.color,
         text: body,
+        mentions,
         ts: Date.now(),
       };
+      if (image) entry.image = image;
       chatLog.push(entry);
       if (chatLog.length > MAX_CHAT) chatLog.splice(0, chatLog.length - MAX_CHAT);
+      trimChatImages();
       broadcast({ t: 'chat', msg: entry });  // 보낸 사람에게도 전달된다
       return;
     }
