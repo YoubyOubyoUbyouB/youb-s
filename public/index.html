@@ -2070,10 +2070,15 @@
     };
   }
 
-  /** 드래그 지점에서 각도·힘을 뽑는다 (활을 뒤로 당기는 느낌) */
+  /**
+   * 드래그 지점에서 각도·힘을 뽑는다.
+   * 앞으로 당기든 뒤로 당기든 화살은 항상 과녁 쪽(오른쪽)으로 날아가도록
+   * 가로 성분은 절댓값을 쓴다. 위아래로 당긴 정도만 각도에 반영된다.
+   */
   function aimFrom(pt) {
     var g = archState.geo;
-    var dx = g.bowX - pt.x, dy = g.bowY - pt.y;
+    var dx = Math.abs(g.bowX - pt.x);      // 방향 상관없이 항상 앞쪽
+    var dy = g.bowY - pt.y;
     var len = Math.hypot(dx, dy);
     if (len < 1) return null;
     var angle = Math.atan2(dy, dx);
@@ -2201,26 +2206,51 @@
     if (aim && myArchTurn()) {
       var a = aimFrom(aim);
       if (a) {
-        ac.strokeStyle = 'rgba(255,255,255,.5)';
+        // 당기고 있는 방향 (가는 점선)
+        ac.strokeStyle = 'rgba(255,255,255,.35)';
         ac.lineWidth = 2;
         ac.setLineDash([8, 8]);
         ac.beginPath(); ac.moveTo(g.bowX, g.bowY); ac.lineTo(aim.x, aim.y); ac.stroke();
+        ac.setLineDash([]);
 
-        // 서버와 같은 식으로 궤적을 미리 그려 준다
+        // 서버와 같은 식으로 궤적을 미리 계산한다
         var v = g.vMax * a.power;
         var x = g.bowX, y = g.bowY;
         var vx = Math.cos(a.angle) * v, vy = Math.sin(a.angle) * v;
         var dt = 1 / 60;
-        ac.strokeStyle = 'rgba(255,255,255,.35)';
-        ac.beginPath(); ac.moveTo(x, y);
-        for (var k = 0; k < 220; k++) {
+        var path = [[x, y]];
+        for (var k = 0; k < 260; k++) {
           vx += s.wind * dt; vy += g.gravity * dt;
           x += vx * dt; y += vy * dt;
-          ac.lineTo(x, y);
+          path.push([x, y]);
           if (y > g.groundY || x > CW) break;
         }
-        ac.stroke();
-        ac.setLineDash([]);
+
+        // 굵게 두 번 겹쳐 그린다 — 어두운 테두리 위에 밝은 선
+        ac.lineCap = 'round';
+        ac.lineJoin = 'round';
+        for (var pass = 0; pass < 2; pass++) {
+          ac.strokeStyle = pass ? 'rgba(255,255,255,.92)' : 'rgba(0,0,0,.55)';
+          ac.lineWidth = pass ? 7 : 13;
+          ac.beginPath();
+          ac.moveTo(path[0][0], path[0][1]);
+          for (var q = 1; q < path.length; q++) ac.lineTo(path[q][0], path[q][1]);
+          ac.stroke();
+        }
+
+        // 궤적 끝에 화살촉을 붙여 날아갈 방향을 분명히 보여 준다
+        var e2 = path[path.length - 1], e1 = path[Math.max(0, path.length - 6)];
+        var ea = Math.atan2(e2[1] - e1[1], e2[0] - e1[0]);
+        ac.save();
+        ac.translate(e2[0], e2[1]);
+        ac.rotate(ea);
+        ac.lineWidth = 7;
+        ac.strokeStyle = 'rgba(0,0,0,.55)';
+        ac.beginPath(); ac.moveTo(-26, -16); ac.lineTo(0, 0); ac.lineTo(-26, 16); ac.stroke();
+        ac.lineWidth = 4;
+        ac.strokeStyle = 'rgba(255,255,255,.92)';
+        ac.beginPath(); ac.moveTo(-26, -16); ac.lineTo(0, 0); ac.lineTo(-26, 16); ac.stroke();
+        ac.restore();
 
         // 힘 게이지
         ac.fillStyle = 'rgba(0,0,0,.5)';
