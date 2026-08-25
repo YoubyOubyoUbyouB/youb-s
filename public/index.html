@@ -228,6 +228,19 @@
   .standings .r i { width: 9px; height: 9px; border-radius: 50%; }
   .standings .r em { font-style: normal; color: var(--muted); }
   .helpKeys { font-size: 12px; color: var(--muted); text-align: center; }
+
+  /* ── 활쏘기 ───────────────────────────── */
+  .arch { display: none; flex-direction: column; align-items: center; gap: 10px;
+          width: 100%; height: 100%; padding: 2px; }
+  .arch.on { display: flex; }
+  .arch-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .arch-top select {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  #archStatus { font-size: 14px; font-weight: 700; }
+  #archStatus .hl { color: var(--accent); }
+  #archCanvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
   .wrap {
     position: relative; background: #fff;
     border-radius: 10px; overflow: hidden;
@@ -378,6 +391,7 @@
   <button class="tool" id="modeBingo">🎲 빙고</button>
   <button class="tool" id="modeLiar">🕵 라이어</button>
   <button class="tool" id="modeRace">🏎 레이싱</button>
+  <button class="tool" id="modeArch">🏹 활쏘기</button>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
   <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
   <div class="peers" id="peers"></div>
@@ -492,6 +506,47 @@
       </div>
       <div class="standings" id="raceStandings"></div>
       <div class="helpKeys">방향키 또는 W A S D — ↑ 가속 · ↓ 브레이크/후진 · ← → 조향 · 잔디로 나가면 느려집니다</div>
+    </div>
+
+    <div class="arch" id="arch">
+      <div class="arch-top">
+        <span id="archStatus">활쏘기가 시작되지 않았습니다</span>
+      </div>
+      <div class="arch-top">
+        <select id="archShots">
+          <option value="1">1발</option>
+          <option value="3" selected>3발</option>
+          <option value="5">5발</option>
+        </select>
+        <select id="archDist">
+          <option value="near">가까움</option>
+          <option value="mid" selected>보통</option>
+          <option value="far">멂</option>
+        </select>
+        <select id="archWind">
+          <option value="none">바람 없음</option>
+          <option value="weak" selected>바람 약함</option>
+          <option value="strong">바람 강함</option>
+        </select>
+        <select id="archMove">
+          <option value="0" selected>고정 과녁</option>
+          <option value="1">움직이는 과녁</option>
+        </select>
+        <select id="archTurn">
+          <option value="0">제한 없음</option>
+          <option value="15000">15초</option>
+          <option value="20000" selected>20초</option>
+          <option value="30000">30초</option>
+        </select>
+        <button class="tool" id="archStart">게임 시작</button>
+        <button class="tool danger" id="archEnd">종료</button>
+      </div>
+      <div class="turnbar" id="archTimer"></div>
+      <div class="trackWrap" id="archWrap">
+        <canvas id="archCanvas"></canvas>
+      </div>
+      <div class="standings" id="archScores"></div>
+      <div class="helpKeys">활을 뒤로 당기듯 <b>드래그했다 놓으면</b> 화살이 날아갑니다 · 바람과 중력이 궤적을 바꿉니다</div>
     </div>
   </div>
 
@@ -1262,8 +1317,10 @@
 
   var modeLiarBtn = document.getElementById('modeLiar');
   var modeRaceBtn = document.getElementById('modeRace');
+  var modeArchBtn = document.getElementById('modeArch');
   var liarEl = document.getElementById('liar');
   var raceEl = document.getElementById('race');
+  var archEl = document.getElementById('arch');
 
   function setMode(m) {
     mode = m;
@@ -1273,17 +1330,21 @@
     bingoEl.classList.toggle('on', m === 'bingo');
     liarEl.classList.toggle('on', m === 'liar');
     raceEl.classList.toggle('on', m === 'race');
+    archEl.classList.toggle('on', m === 'arch');
     modePaintBtn.classList.toggle('active', paint);
     modeBingoBtn.classList.toggle('active', m === 'bingo');
     modeLiarBtn.classList.toggle('active', m === 'liar');
     modeRaceBtn.classList.toggle('active', m === 'race');
+    modeArchBtn.classList.toggle('active', m === 'arch');
     if (paint) fit();
     if (m === 'race') { fitTrack(); drawScene(0); }   // 전환 즉시 한 장 그려 둔다
+    if (m === 'arch') { fitArch(); drawArch(); }
   }
   modePaintBtn.addEventListener('click', function () { setMode('paint'); });
   modeBingoBtn.addEventListener('click', function () { setMode('bingo'); });
   modeLiarBtn.addEventListener('click', function () { setMode('liar'); });
   modeRaceBtn.addEventListener('click', function () { setMode('race'); });
+  modeArchBtn.addEventListener('click', function () { setMode('arch'); });
 
   // ── 빙고 ────────────────────────────────────────
   var bingoState = null;
@@ -1966,6 +2027,303 @@
     });
   }
 
+  // ── 활쏘기 ──────────────────────────────────────
+  // 물리·점수 판정은 전부 서버가 한다. 여기서는 조준 미리보기와 그리기만 담당한다.
+  var aCanvas = document.getElementById('archCanvas');
+  var ac = aCanvas.getContext('2d');
+  aCanvas.width = CW; aCanvas.height = CH;
+  var archWrap = document.getElementById('archWrap');
+  var archStatus = document.getElementById('archStatus');
+  var archTimer = document.getElementById('archTimer');
+  var archScores = document.getElementById('archScores');
+
+  var archState = null;
+  var archDeadline = 0;
+  var aim = null;            // { x, y } 드래그 중인 지점
+  var flight = null;         // { pts, i, color, score }
+  var lastShotId = 0;
+
+  function fitArch() {
+    var stage = archEl.parentElement;
+    var aw = stage.clientWidth - 28;
+    var ah = stage.clientHeight - 190;
+    if (aw <= 0 || ah <= 0) return;
+    var k = Math.min(aw / CW, ah / CH);
+    archWrap.style.width = Math.max(320, Math.floor(CW * k)) + 'px';
+    archWrap.style.height = Math.max(180, Math.floor(CH * k)) + 'px';
+  }
+  window.addEventListener('resize', fitArch);
+
+  function archTargetY() {
+    var s = archState;
+    if (!s || !s.on || !s.moving) return s && s.on ? s.geo.centerY : 460;
+    var off = (s.mvOff + (Date.now() - archRecvAt)) % s.geo.movePeriod;
+    return s.geo.centerY + s.geo.moveAmp * Math.sin(off / s.geo.movePeriod * Math.PI * 2);
+  }
+  var archRecvAt = 0;
+
+  function archToCanvas(ev) {
+    var r = aCanvas.getBoundingClientRect();
+    return {
+      x: (ev.clientX - r.left) / r.width * CW,
+      y: (ev.clientY - r.top) / r.height * CH,
+    };
+  }
+
+  /** 드래그 지점에서 각도·힘을 뽑는다 (활을 뒤로 당기는 느낌) */
+  function aimFrom(pt) {
+    var g = archState.geo;
+    var dx = g.bowX - pt.x, dy = g.bowY - pt.y;
+    var len = Math.hypot(dx, dy);
+    if (len < 1) return null;
+    var angle = Math.atan2(dy, dx);
+    angle = Math.max(-1.5, Math.min(0.35, angle));
+    var power = Math.max(0.15, Math.min(1, len / 240));
+    return { angle: angle, power: power };
+  }
+
+  function myArchTurn() {
+    var s = archState;
+    return !!(s && s.on && s.phase === 'aim' && s.turn === me.id);
+  }
+
+  aCanvas.addEventListener('pointerdown', function (ev) {
+    if (!myArchTurn()) return;
+    try { aCanvas.setPointerCapture(ev.pointerId); } catch (e) {}
+    aim = archToCanvas(ev);
+  });
+  aCanvas.addEventListener('pointermove', function (ev) {
+    if (!aim) return;
+    aim = archToCanvas(ev);
+  });
+  function releaseAim(ev) {
+    if (!aim) return;
+    var a = aimFrom(aim);
+    aim = null;
+    try {
+      if (ev && ev.pointerId != null && aCanvas.hasPointerCapture(ev.pointerId)) {
+        aCanvas.releasePointerCapture(ev.pointerId);
+      }
+    } catch (e) {}
+    if (a && myArchTurn()) send({ t: 'arch', act: 'shoot', angle: a.angle, power: a.power });
+  }
+  aCanvas.addEventListener('pointerup', releaseAim);
+  aCanvas.addEventListener('pointercancel', function () { aim = null; });
+  aCanvas.addEventListener('pointerleave', releaseAim);
+
+  document.getElementById('archStart').addEventListener('click', function () {
+    if (archState && archState.on && archState.phase !== 'done' &&
+        !confirm('진행 중인 활쏘기가 있습니다. 새로 시작할까요?')) return;
+    send({
+      t: 'arch', act: 'start',
+      shots: Number(document.getElementById('archShots').value),
+      dist: document.getElementById('archDist').value,
+      wind: document.getElementById('archWind').value,
+      moving: document.getElementById('archMove').value === '1',
+      turnMs: Number(document.getElementById('archTurn').value),
+    });
+  });
+  document.getElementById('archEnd').addEventListener('click', function () {
+    if (confirm('활쏘기를 종료할까요?')) send({ t: 'arch', act: 'end' });
+  });
+
+  // ── 그리기
+  function drawArch() {
+    var s = archState;
+    ac.fillStyle = '#101a2b';
+    ac.fillRect(0, 0, CW, CH);
+
+    if (!s || !s.on) {
+      ac.fillStyle = 'rgba(255,255,255,.45)';
+      ac.font = 'bold 26px "Malgun Gothic", sans-serif';
+      ac.textAlign = 'center';
+      ac.fillText('설정을 고르고 게임 시작을 누르세요', CW / 2, CH / 2);
+      return;
+    }
+    var g = s.geo;
+
+    // 땅
+    ac.fillStyle = '#1d3a24';
+    ac.fillRect(0, g.groundY, CW, CH - g.groundY);
+    ac.strokeStyle = 'rgba(255,255,255,.15)';
+    ac.lineWidth = 2;
+    ac.beginPath(); ac.moveTo(0, g.groundY); ac.lineTo(CW, g.groundY); ac.stroke();
+
+    // 바람 표시
+    ac.font = 'bold 20px "Malgun Gothic", sans-serif';
+    ac.textAlign = 'center';
+    ac.fillStyle = s.wind ? '#93c5fd' : 'rgba(255,255,255,.35)';
+    var wtxt = !s.wind ? '바람 없음'
+      : (s.wind > 0 ? '→→ ' : '←← ') + Math.abs(Math.round(s.wind / 50) / 10) + ' 바람';
+    ac.fillText(wtxt, CW / 2, 52);
+
+    // 과녁
+    var ty = archTargetY();
+    var rings = [[1, '#f8fafc'], [0.8, '#111827'], [0.6, '#38bdf8'], [0.4, '#ef4444'], [0.2, '#fbbf24']];
+    for (var i = 0; i < rings.length; i++) {
+      ac.beginPath();
+      ac.arc(g.targetX, ty, g.targetR * rings[i][0], 0, Math.PI * 2);
+      ac.fillStyle = rings[i][1];
+      ac.fill();
+    }
+    ac.strokeStyle = 'rgba(0,0,0,.6)';
+    ac.lineWidth = 2;
+    ac.beginPath(); ac.arc(g.targetX, ty, g.targetR, 0, Math.PI * 2); ac.stroke();
+    // 받침대
+    ac.strokeStyle = '#7c5a3a';
+    ac.lineWidth = 8;
+    ac.beginPath(); ac.moveTo(g.targetX, ty + g.targetR); ac.lineTo(g.targetX, g.groundY); ac.stroke();
+
+    // 이미 꽂힌 화살
+    (s.arrows || []).forEach(function (a) {
+      ac.strokeStyle = a.c;
+      ac.lineWidth = 3;
+      ac.beginPath(); ac.moveTo(a.x - 26, a.y - 8); ac.lineTo(a.x, a.y); ac.stroke();
+    });
+
+    // 궁수
+    ac.strokeStyle = '#e7eaf0';
+    ac.lineWidth = 5;
+    ac.beginPath();
+    ac.arc(g.bowX - 30, g.bowY - 60, 16, 0, Math.PI * 2);          // 머리
+    ac.stroke();
+    ac.beginPath();
+    ac.moveTo(g.bowX - 30, g.bowY - 44); ac.lineTo(g.bowX - 30, g.groundY - 60);
+    ac.moveTo(g.bowX - 30, g.groundY - 60); ac.lineTo(g.bowX - 55, g.groundY);
+    ac.moveTo(g.bowX - 30, g.groundY - 60); ac.lineTo(g.bowX - 5, g.groundY);
+    ac.moveTo(g.bowX - 30, g.bowY - 20); ac.lineTo(g.bowX, g.bowY);
+    ac.stroke();
+    ac.strokeStyle = '#c2853f';                                     // 활
+    ac.lineWidth = 6;
+    ac.beginPath(); ac.arc(g.bowX, g.bowY, 42, -1.15, 1.15); ac.stroke();
+
+    // 조준 미리보기
+    if (aim && myArchTurn()) {
+      var a = aimFrom(aim);
+      if (a) {
+        ac.strokeStyle = 'rgba(255,255,255,.5)';
+        ac.lineWidth = 2;
+        ac.setLineDash([8, 8]);
+        ac.beginPath(); ac.moveTo(g.bowX, g.bowY); ac.lineTo(aim.x, aim.y); ac.stroke();
+
+        // 서버와 같은 식으로 궤적을 미리 그려 준다
+        var v = g.vMax * a.power;
+        var x = g.bowX, y = g.bowY;
+        var vx = Math.cos(a.angle) * v, vy = Math.sin(a.angle) * v;
+        var dt = 1 / 60;
+        ac.strokeStyle = 'rgba(255,255,255,.35)';
+        ac.beginPath(); ac.moveTo(x, y);
+        for (var k = 0; k < 220; k++) {
+          vx += s.wind * dt; vy += g.gravity * dt;
+          x += vx * dt; y += vy * dt;
+          ac.lineTo(x, y);
+          if (y > g.groundY || x > CW) break;
+        }
+        ac.stroke();
+        ac.setLineDash([]);
+
+        // 힘 게이지
+        ac.fillStyle = 'rgba(0,0,0,.5)';
+        ac.fillRect(g.bowX - 60, g.bowY + 60, 220, 16);
+        ac.fillStyle = a.power > 0.85 ? '#f87171' : '#4ade80';
+        ac.fillRect(g.bowX - 58, g.bowY + 62, 216 * a.power, 12);
+      }
+    }
+
+    // 날아가는 화살
+    if (flight) {
+      var pts = flight.pts;
+      var idx = Math.min(pts.length - 1, Math.floor(flight.i));
+      ac.strokeStyle = 'rgba(255,255,255,.25)';
+      ac.lineWidth = 2;
+      ac.beginPath();
+      for (var q = 0; q <= idx; q++) {
+        if (q === 0) ac.moveTo(pts[q][0], pts[q][1]);
+        else ac.lineTo(pts[q][0], pts[q][1]);
+      }
+      ac.stroke();
+
+      var pv = pts[Math.max(0, idx - 1)], cu = pts[idx];
+      var ang = Math.atan2(cu[1] - pv[1], cu[0] - pv[0]);
+      ac.save();
+      ac.translate(cu[0], cu[1]);
+      ac.rotate(ang);
+      ac.strokeStyle = flight.color;
+      ac.lineWidth = 4;
+      ac.beginPath(); ac.moveTo(-28, 0); ac.lineTo(0, 0); ac.stroke();
+      ac.beginPath(); ac.moveTo(-8, -6); ac.lineTo(0, 0); ac.lineTo(-8, 6); ac.stroke();
+      ac.restore();
+    }
+  }
+
+  var archLast = 0;
+  function archFrame(ts) {
+    requestAnimationFrame(archFrame);
+    var dt = archLast ? Math.min(0.05, (ts - archLast) / 1000) : 0;
+    archLast = ts;
+    if (mode !== 'arch') return;
+    if (flight) {
+      flight.i += dt * 30;                     // 궤적은 1/30초 간격으로 기록돼 있다
+      if (flight.i >= flight.pts.length - 1) flight = null;
+    }
+    drawArch();
+  }
+  requestAnimationFrame(archFrame);
+
+  // 남은 시간 표시
+  setInterval(function () {
+    var s = archState;
+    if (!s || !s.on || s.phase !== 'aim' || !archDeadline) {
+      archTimer.textContent = '';
+      archTimer.className = 'turnbar';
+      return;
+    }
+    var left = Math.max(0, archDeadline - Date.now());
+    archTimer.textContent = '남은 시간 ' + (left / 1000).toFixed(1) + '초 — 지나면 자동으로 발사됩니다';
+    archTimer.className = 'turnbar' + (left < 4000 ? ' warn' : '');
+  }, 200);
+
+  function renderArch() {
+    var s = archState;
+    archScores.innerHTML = '';
+    archStatus.innerHTML = '';
+
+    if (!s || !s.on) {
+      archStatus.textContent = '활쏘기가 시작되지 않았습니다 — 설정을 고르고 게임 시작을 누르세요';
+      return;
+    }
+
+    if (s.phase === 'done') {
+      var top = s.results && s.results[0];
+      archStatus.appendChild(el('span', 'hl', '🏹 종료'));
+      archStatus.appendChild(document.createTextNode(
+        top ? ' — ' + top.name + ' 님 우승 (' + top.total + '점)' : ''));
+    } else {
+      var mine = null;
+      s.players.forEach(function (x) { if (x.id === me.id) mine = x; });
+      var head = myArchTurn() ? '내 차례' : s.turnName + ' 님 차례';
+      archStatus.appendChild(el('span', 'hl', head));
+      archStatus.appendChild(document.createTextNode(
+        ' — ' + (mine ? (mine.shots.length + ' / ' + s.shotsPer + '발') : '관전 중') +
+        (s.phase === 'fly' ? ' · 화살이 날아가는 중' : (myArchTurn() ? ' · 드래그해서 쏘세요' : ''))));
+    }
+
+    var rows = (s.phase === 'done' && s.results) ? s.results : s.players.slice().sort(function (a, b) {
+      return b.total - a.total;
+    });
+    rows.forEach(function (pl, i) {
+      var box = el('div', 'r' + (pl.id === me.id ? ' me' : '') + (pl.id === s.turn && s.phase !== 'done' ? ' turn' : ''));
+      var dot = el('i');
+      dot.style.background = pl.color;
+      box.appendChild(dot);
+      box.appendChild(document.createTextNode((i + 1) + '위 ' + pl.name + (pl.id === me.id ? '(나)' : '') + ' '));
+      var em = el('em', null, pl.total + '점');
+      box.appendChild(em);
+      if (pl.shots && pl.shots.length) box.appendChild(el('span', null, ' (' + pl.shots.join('·') + ')'));
+      archScores.appendChild(box);
+    });
+  }
+
   // ── 이름 ────────────────────────────────────────
   var nameInput = document.getElementById('nameInput');
   var savedName = '';
@@ -2114,6 +2472,20 @@
           liarState = m;
           renderLiar();
           if (!liarWasOn && m.on) setMode('liar');
+          break;
+
+        case 'arch':
+          var archWasOn = !!(archState && archState.on);
+          archState = m;
+          archRecvAt = Date.now();
+          archDeadline = m.turnLeft ? Date.now() + m.turnLeft : 0;
+          if (m.on && m.shot && m.shot.id !== lastShotId) {
+            lastShotId = m.shot.id;
+            flight = { pts: m.shot.pts, i: 0, color: m.shot.color, score: m.shot.score };
+          }
+          if (!m.on) { flight = null; lastShotId = 0; }
+          renderArch();
+          if (!archWasOn && m.on) { setMode('arch'); fitArch(); }
           break;
 
         case 'race':

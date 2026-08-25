@@ -644,6 +644,240 @@ function sendLiar(only) {
   }
 }
 
+// ─────────────────────────────────────────────── 활쏘기
+
+// 화면 좌표는 캔버스(1600×900) 기준. 물리 계산과 점수 판정은 전부 서버가 한다.
+const AR = {
+  bowX: 240, bowY: 630,        // 활 위치
+  groundY: 790,
+  centerY: 460,                // 과녁 중심 높이
+  targetR: 105,                // 과녁 반지름
+  gravity: 950,                // px/s²
+  vMax: 1450,                  // 힘 1.0 일 때 초기 속도
+  dt: 1 / 120,
+  maxT: 8,
+  sample: 4,                   // 몇 스텝마다 궤적을 기록할지 (1/30초 간격)
+  moveAmp: 150,
+  movePeriod: 4000,
+  dists: { near: 820, mid: 1120, far: 1400 },
+  winds: { none: 0, weak: 240, strong: 500 },
+};
+
+let arch = null;
+const r1 = (v) => Math.round(v * 10) / 10;
+
+/** 움직이는 과녁의 현재 높이 */
+function targetYAt(ms) {
+  if (!arch || !arch.moving) return AR.centerY;
+  const t = (ms - arch.mvT0) / AR.movePeriod * Math.PI * 2;
+  return AR.centerY + AR.moveAmp * Math.sin(t);
+}
+
+function newWind() {
+  const w = AR.winds[arch.windMode] || 0;
+  return w ? Math.round((crypto.randomInt(2001) / 1000 - 1) * w) : 0;
+}
+
+/** 화살 궤적을 계산한다. 과녁 평면을 지나면 그 높이를, 아니면 땅에 떨어진 지점을 돌려준다. */
+function flyArrow(angle, power, wind, targetX) {
+  const v = AR.vMax * power;
+  let x = AR.bowX, y = AR.bowY;
+  let vx = Math.cos(angle) * v, vy = Math.sin(angle) * v;
+  const pts = [[r1(x), r1(y)]];
+  let t = 0, step = 0;
+
+  while (t < AR.maxT) {
+    const px = x, py = y;
+    vx += wind * AR.dt;
+    vy += AR.gravity * AR.dt;
+    x += vx * AR.dt;
+    y += vy * AR.dt;
+    t += AR.dt;
+    step++;
+
+    if (px < targetX && x >= targetX) {          // 과녁 평면 통과
+      const f = (targetX - px) / (x - px);
+      const hy = py + (y - py) * f;
+      pts.push([r1(targetX), r1(hy)]);
+      return { pts, t, hitY: hy, onTarget: true };
+    }
+    if (y >= AR.groundY) {                        // 땅에 떨어짐
+      const f = (AR.groundY - py) / (y - py);
+      const hx = px + (x - px) * f;
+      pts.push([r1(hx), r1(AR.groundY)]);
+      return { pts, t, groundX: hx, onTarget: false };
+    }
+    if (step % AR.sample === 0) pts.push([r1(x), r1(y)]);
+    if (x > CANVAS_W + 300 || pts.length > 900) break;
+  }
+  pts.push([r1(x), r1(y)]);
+  return { pts, t, onTarget: false };
+}
+
+/** 과녁 중심에서 얼마나 벗어났는지로 점수를 매긴다 */
+function ringScore(dy) {
+  const R = AR.targetR;
+  const d = Math.abs(dy);
+  if (d <= R * 0.2) return 10;
+  if (d <= R * 0.4) return 8;
+  if (d <= R * 0.6) return 6;
+  if (d <= R * 0.8) return 4;
+  if (d <= R) return 2;
+  return 0;
+}
+
+function resetArchDeadline() {
+  if (!arch) return;
+  arch.turnDeadline = (arch.phase !== 'aim' || !arch.turnMs) ? 0 : Date.now() + arch.turnMs;
+}
+
+function archRanking() {
+  return [...arch.scores.entries()]
+    .filter(([id]) => clients.has(id))
+    .map(([id, sc]) => {
+      const c = clients.get(id);
+      return { id, name: c.name, color: c.color, total: sc.total, shots: sc.shots.slice() };
+    })
+    .sort((a, b) => b.total - a.total);
+}
+
+function finishArch(reason) {
+  arch.phase = 'done';
+  arch.turnDeadline = 0;
+  arch.results = archRanking();
+  const top = arch.results[0];
+  broadcast({
+    t: 'sys',
+    text: reason || (top ? `🏹 활쏘기 종료 — ${top.name} 님 우승 (${top.total}점)` : '🏹 활쏘기 종료'),
+  });
+}
+
+/** 아직 쏠 화살이 남은 다음 사람에게 차례를 넘긴다. */
+function nextArcher() {
+  if (!arch) return;
+  for (let k = 0; k < arch.order.length; k++) {
+    arch.turnIdx = (arch.turnIdx + 1) % arch.order.length;
+    const id = arch.order[arch.turnIdx];
+    const sc = arch.scores.get(id);
+    if (clients.has(id) && sc && sc.shots.length < arch.shotsPer) {
+      arch.phase = 'aim';
+      arch.wind = newWind();          // 매 차례마다 바람이 바뀐다
+      resetArchDeadline();
+      return;
+    }
+  }
+  finishArch();
+}
+
+function doShoot(id, angle, power, auto) {
+  if (!arch || arch.phase !== 'aim') return;
+  if (arch.order[arch.turnIdx] !== id) return;
+  const sc = arch.scores.get(id);
+  if (!sc || sc.shots.length >= arch.shotsPer) return;
+
+  const a = clamp(angle, -1.5, 0.35);      // 항상 앞쪽으로만 쏠 수 있다
+  const pw = clamp(power, 0.15, 1);
+  const sim = flyArrow(a, pw, arch.wind, arch.targetX);
+
+  let score = 0, hx = null, hy = null;
+  if (sim.onTarget) {
+    const cy = targetYAt(Date.now() + sim.t * 1000);   // 움직이는 과녁은 도착 시점 높이로 판정
+    score = ringScore(sim.hitY - cy);
+    hx = arch.targetX;
+    hy = sim.hitY;
+  } else if (sim.groundX != null) {
+    hx = sim.groundX;
+    hy = AR.groundY;
+  }
+
+  sc.shots.push(score);
+  sc.total += score;
+
+  const c = clients.get(id);
+  if (hx != null) {
+    arch.arrows.push({ x: r1(hx), y: r1(hy), s: score, c: c ? c.color : '#888' });
+    if (arch.arrows.length > 60) arch.arrows.splice(0, arch.arrows.length - 60);
+  }
+
+  arch.shotId++;
+  arch.shot = {
+    id: arch.shotId,
+    pts: sim.pts,
+    score,
+    by: id,
+    name: c ? c.name : '?',
+    color: c ? c.color : '#888',
+    auto: !!auto,
+  };
+  arch.phase = 'fly';
+  arch.turnDeadline = 0;
+  arch.resumeAt = Date.now() + Math.min(3000, sim.t * 1000) + 900;
+
+  broadcast({
+    t: 'sys',
+    text: `${c ? c.name : '?'} 님 ${score ? score + '점' : '빗나감'}${auto ? ' (시간 초과 — 자동 발사)' : ''}`,
+  });
+}
+
+// 차례 제한시간과 화살 비행 종료를 함께 처리한다
+setInterval(() => {
+  if (!arch) return;
+  const now = Date.now();
+
+  if (arch.phase === 'fly') {
+    if (now >= arch.resumeAt) { nextArcher(); sendArch(); }
+    return;
+  }
+  if (arch.phase === 'aim' && arch.turnDeadline && now >= arch.turnDeadline) {
+    const id = arch.order[arch.turnIdx];
+    if (!clients.has(id)) { nextArcher(); sendArch(); return; }
+    // 자동 발사 — 대충 앞쪽 위로
+    const a = -0.9 + crypto.randomInt(500) / 1000;
+    const pw = 0.55 + crypto.randomInt(350) / 1000;
+    doShoot(id, a, pw, true);
+    sendArch();
+  }
+}, 200).unref();
+
+function sendArch(only) {
+  const targets = only ? [only] : [...clients.values()];
+
+  if (!arch) {
+    for (const c of targets) send(c, { t: 'arch', on: false });
+    return;
+  }
+
+  const turnId = arch.order[arch.turnIdx];
+  const msg = {
+    t: 'arch', on: true,
+    phase: arch.phase,
+    geo: {
+      bowX: AR.bowX, bowY: AR.bowY, groundY: AR.groundY,
+      centerY: AR.centerY, targetR: AR.targetR,
+      gravity: AR.gravity, vMax: AR.vMax,
+      targetX: arch.targetX,
+      moveAmp: AR.moveAmp, movePeriod: AR.movePeriod,
+    },
+    moving: arch.moving,
+    // 과녁 흔들림은 각자 화면에서 이어서 그린다 (시계 차이를 피하려고 위상만 보낸다)
+    mvOff: arch.moving ? (Date.now() - arch.mvT0) % AR.movePeriod : 0,
+    wind: arch.wind,
+    shotsPer: arch.shotsPer,
+    turn: turnId,
+    turnName: clients.has(turnId) ? clients.get(turnId).name : '—',
+    turnLeft: arch.turnDeadline ? Math.max(0, arch.turnDeadline - Date.now()) : 0,
+    arrows: arch.arrows,
+    shot: arch.shot,
+    results: arch.results,
+    players: arch.order.filter((id) => clients.has(id)).map((id) => {
+      const c = clients.get(id);
+      const sc = arch.scores.get(id) || { total: 0, shots: [] };
+      return { id, name: c.name, color: c.color, total: sc.total, shots: sc.shots };
+    }),
+  };
+  for (const c of targets) send(c, msg);
+}
+
 // ─────────────────────────────────────────────── 레이싱
 
 // 클라이언트(public/index.html)에도 같은 값이 들어 있다. 한쪽만 고치면 예측이 어긋난다.
@@ -1013,6 +1247,14 @@ server.on('upgrade', (req, socket) => {
       }
       sendLiar();
     }
+    if (arch) {
+      // 나간 사람 차례였으면 다음으로 넘긴다
+      if (arch.phase === 'aim' && arch.order[arch.turnIdx] === id) { nextArcher(); }
+      if (![...arch.scores.keys()].some((aid) => clients.has(aid))) {
+        if (arch.phase !== 'done') finishArch('참가자가 모두 나가 활쏘기를 종료합니다');
+      }
+      sendArch();
+    }
     if (race && race.phase !== 'done' && ![...race.cars.keys()].some((cid) => clients.has(cid))) {
       endRace('참가자가 모두 나가 레이스를 종료합니다');
       sendRace();
@@ -1042,6 +1284,7 @@ server.on('upgrade', (req, socket) => {
   sendBingo(bingo ? undefined : client);
   sendLiar(liar ? undefined : client);
   sendRace(client);   // 진행 중인 레이스는 관전만 (다음 판부터 참여)
+  sendArch(client);   // 활쏘기도 마찬가지
 
   console.log(`[+] ${client.name} 접속 (현재 ${clients.size}명)`);
 
@@ -1067,6 +1310,11 @@ function handle(client, text) {
       if (!name) return;
       client.name = name;
       pushPeers();
+      // 게임 화면에도 이름이 박혀 나가므로 진행 중이면 함께 갱신한다
+      if (bingo) sendBingo();
+      if (liar) sendLiar();
+      if (arch) sendArch();
+      if (race) sendRace();
       return;
     }
 
@@ -1119,6 +1367,62 @@ function handle(client, text) {
         if (history[i].by === client.id && history[i].sid === target) history.splice(i, 1);
       }
       broadcast({ t: 'undo', by: client.id, sid: target });  // 보낸 사람에게도 전달된다
+      return;
+    }
+
+    case 'arch': {
+      if (msg.act === 'start') {
+        const ids = [...clients.keys()].sort((a, b) => a - b);
+        if (!ids.length) return;
+
+        const shotsPer = Math.round(clamp(num(msg.shots) ?? 3, 1, 10));
+        const distKey = AR.dists[msg.dist] ? msg.dist : 'mid';
+        const windMode = AR.winds[msg.wind] != null ? msg.wind : 'weak';
+        const turnMs = Math.round(clamp(num(msg.turnMs) ?? 20000, 0, 120000));
+
+        arch = {
+          phase: 'aim',
+          order: shuffleIds(ids),
+          turnIdx: 0,
+          shotsPer,
+          targetX: AR.dists[distKey],
+          windMode,
+          wind: 0,
+          moving: !!msg.moving,
+          mvT0: Date.now(),
+          turnMs, turnDeadline: 0, resumeAt: 0,
+          scores: new Map(ids.map((id) => [id, { total: 0, shots: [] }])),
+          arrows: [],
+          shot: null, shotId: 0, results: null,
+        };
+        arch.wind = newWind();
+        resetArchDeadline();
+
+        broadcast({
+          t: 'sys',
+          text: `${client.name} 님이 활쏘기를 시작했습니다 — ${shotsPer}발씩, ${ids.length}명` +
+            `${arch.moving ? ', 움직이는 과녁' : ''}`,
+        });
+        sendArch();
+        console.log(`[=] 활쏘기 시작 — ${shotsPer}발, ${ids.length}명, 거리 ${distKey}`);
+        return;
+      }
+
+      if (msg.act === 'shoot') {
+        const a = num(msg.angle), pw = num(msg.power);
+        if (a === null || pw === null) return;
+        doShoot(client.id, a, pw, false);
+        sendArch();
+        return;
+      }
+
+      if (msg.act === 'end') {
+        if (!arch) return;
+        arch = null;
+        broadcast({ t: 'sys', text: `${client.name} 님이 활쏘기를 종료했습니다` });
+        sendArch();
+        return;
+      }
       return;
     }
 
@@ -1278,12 +1582,13 @@ function handle(client, text) {
 
         bingo = {
           size, goal, turnMs, turnDeadline: 0,
-          boards: new Map(), called: [], order: ids, turnIdx: 0, over: false, winners: [],
+          // 시작할 때마다 순서를 새로 섞는다 (판 아래에서 다시 바꿀 수 있다)
+          boards: new Map(), called: [], order: shuffleIds(ids), turnIdx: 0, over: false, winners: [],
         };
         for (const id of ids) bingo.boards.set(id, shuffledBoard(size));
         resetTurnDeadline();
 
-        broadcast({ t: 'sys', text: `${client.name} 님이 빙고를 시작했습니다 — ${size}×${size} 판, ${goal}줄 완성하면 승리` });
+        broadcast({ t: 'sys', text: `${client.name} 님이 빙고를 시작했습니다 — ${size}×${size} 판, ${goal}줄 완성하면 승리 (순서 무작위)` });
         sendBingo();
         console.log(`[=] ${client.name} 님이 빙고 시작 (${size}x${size}, ${goal}줄, ${ids.length}명)`);
         return;
