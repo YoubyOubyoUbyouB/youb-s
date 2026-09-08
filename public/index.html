@@ -543,7 +543,7 @@
         <div class="bigmsg" id="wbBig" style="display:none"></div>
       </div>
       <div class="standings" id="wbStand"></div>
-      <div class="helpKeys">방향키 또는 W A S D 로 이동 · <b>스페이스바</b>로 물풍선 놓기 ·
+      <div class="helpKeys"><b>방향키</b>로 이동 · <b>스페이스바</b>로 물풍선 놓기 ·
         물줄기에 닿으면 물방울에 갇히고, 6.5초 안에 누군가의 물줄기가 닿으면 풀려납니다</div>
     </div>
 
@@ -2527,6 +2527,10 @@
   }
 
   // ── 키 입력 ──
+  // 물풍선은 방향키만 쓴다. W A S D 를 빼 두면 채팅을 치다가 캐릭터가 움직이는 일이 없다.
+  var WB_KEYMAP = {
+    ArrowUp: 'u', ArrowDown: 'd', ArrowLeft: 'l', ArrowRight: 'r',
+  };
   var wbKeys = { u: false, d: false, l: false, r: false };
   var wbSent = '';
   function wbPush(force) {
@@ -2544,7 +2548,7 @@
       if (down && !e.repeat) send({ t: 'wb', act: 'drop' });
       return;
     }
-    var k = KEYMAP[e.code];
+    var k = WB_KEYMAP[e.code];
     if (!k) return;
     e.preventDefault();
     if (wbKeys[k] === down) return;
