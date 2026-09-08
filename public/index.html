@@ -229,6 +229,19 @@
   .standings .r em { font-style: normal; color: var(--muted); }
   .helpKeys { font-size: 12px; color: var(--muted); text-align: center; }
 
+  /* ── 물풍선 ───────────────────────────── */
+  .wb { display: none; flex-direction: column; align-items: center; gap: 8px;
+        width: 100%; height: 100%; padding: 2px; }
+  .wb.on { display: flex; }
+  .wb-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .wb-top select {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  #wbStatus { font-size: 14px; font-weight: 700; }
+  #wbStatus .hl { color: var(--accent); }
+  #wbCanvas { display: block; width: 100%; height: 100%; }
+
   /* ── 활쏘기 ───────────────────────────── */
   .arch { display: none; flex-direction: column; align-items: center; gap: 10px;
           width: 100%; height: 100%; padding: 2px; }
@@ -392,6 +405,7 @@
   <button class="tool" id="modeLiar">🕵 라이어</button>
   <button class="tool" id="modeRace">🏎 레이싱</button>
   <button class="tool" id="modeArch">🏹 활쏘기</button>
+  <button class="tool" id="modeWb">💧 물풍선</button>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">연결 중…</span></div>
   <input id="nameInput" maxlength="20" placeholder="내 이름" autocomplete="off">
   <div class="peers" id="peers"></div>
@@ -506,6 +520,31 @@
       </div>
       <div class="standings" id="raceStandings"></div>
       <div class="helpKeys">방향키 또는 W A S D — ↑ 가속 · ↓ 브레이크/후진 · ← → 조향 · 잔디로 나가면 느려집니다</div>
+    </div>
+
+    <div class="wb" id="wb">
+      <div class="wb-top"><span id="wbStatus">물풍선이 시작되지 않았습니다</span></div>
+      <div class="wb-top">
+        <select id="wbBombs">
+          <option value="1" selected>풍선 1개로 시작</option>
+          <option value="2">풍선 2개로 시작</option>
+          <option value="3">풍선 3개로 시작</option>
+        </select>
+        <select id="wbPower">
+          <option value="1" selected>물줄기 1칸으로 시작</option>
+          <option value="2">물줄기 2칸으로 시작</option>
+          <option value="3">물줄기 3칸으로 시작</option>
+        </select>
+        <button class="tool" id="wbStart">게임 시작</button>
+        <button class="tool danger" id="wbEnd">종료</button>
+      </div>
+      <div class="trackWrap" id="wbWrap">
+        <canvas id="wbCanvas"></canvas>
+        <div class="bigmsg" id="wbBig" style="display:none"></div>
+      </div>
+      <div class="standings" id="wbStand"></div>
+      <div class="helpKeys">방향키 또는 W A S D 로 이동 · <b>스페이스바</b>로 물풍선 놓기 ·
+        물줄기에 닿으면 물방울에 갇히고, 6.5초 안에 누군가의 물줄기가 닿으면 풀려납니다</div>
     </div>
 
     <div class="arch" id="arch">
@@ -1318,9 +1357,11 @@
   var modeLiarBtn = document.getElementById('modeLiar');
   var modeRaceBtn = document.getElementById('modeRace');
   var modeArchBtn = document.getElementById('modeArch');
+  var modeWbBtn = document.getElementById('modeWb');
   var liarEl = document.getElementById('liar');
   var raceEl = document.getElementById('race');
   var archEl = document.getElementById('arch');
+  var wbEl = document.getElementById('wb');
 
   function setMode(m) {
     mode = m;
@@ -1331,20 +1372,24 @@
     liarEl.classList.toggle('on', m === 'liar');
     raceEl.classList.toggle('on', m === 'race');
     archEl.classList.toggle('on', m === 'arch');
+    wbEl.classList.toggle('on', m === 'wb');
     modePaintBtn.classList.toggle('active', paint);
     modeBingoBtn.classList.toggle('active', m === 'bingo');
     modeLiarBtn.classList.toggle('active', m === 'liar');
     modeRaceBtn.classList.toggle('active', m === 'race');
     modeArchBtn.classList.toggle('active', m === 'arch');
+    modeWbBtn.classList.toggle('active', m === 'wb');
     if (paint) fit();
     if (m === 'race') { fitTrack(); drawScene(0); }   // 전환 즉시 한 장 그려 둔다
     if (m === 'arch') { fitArch(); drawArch(); }
+    if (m === 'wb') { fitWb(); drawWb(); }
   }
   modePaintBtn.addEventListener('click', function () { setMode('paint'); });
   modeBingoBtn.addEventListener('click', function () { setMode('bingo'); });
   modeLiarBtn.addEventListener('click', function () { setMode('liar'); });
   modeRaceBtn.addEventListener('click', function () { setMode('race'); });
   modeArchBtn.addEventListener('click', function () { setMode('arch'); });
+  modeWbBtn.addEventListener('click', function () { setMode('wb'); });
 
   // ── 빙고 ────────────────────────────────────────
   var bingoState = null;
@@ -2354,6 +2399,426 @@
     });
   }
 
+  // ── 물풍선 ──────────────────────────────────────
+  // 판정은 전부 서버가 한다. 여기서는 그리기와, 내 캐릭터만 미리 움직여 보는
+  // 예측(prediction)을 담당한다. 서버 값이 오면 조금씩 그쪽으로 당겨 맞춘다.
+  var wbCanvas = document.getElementById('wbCanvas');
+  var wc = wbCanvas.getContext('2d');
+  wbCanvas.width = CW; wbCanvas.height = CH;
+  var wbWrap = document.getElementById('wbWrap');
+  var wbStatusEl = document.getElementById('wbStatus');
+  var wbStandEl = document.getElementById('wbStand');
+  var wbBig = document.getElementById('wbBig');
+
+  // 서버(server.js 의 WB)와 반드시 같아야 하는 값들
+  var WBC = { half: 23, baseSpeed: 175, speedStep: 32, glide: 130 };
+
+  var wbState = null;
+  var wbMap = null;          // 숫자 배열 (0 빈칸 · 1 벽 · 2 상자)
+  var wbMine = null;         // 내 캐릭터의 예측 위치 { x, y, dir }
+  var wbView = {};           // 남들 위치를 부드럽게 따라가는 값
+  var wbLast = 0;
+  var wbHud = 0;
+
+  function fitWb() {
+    var stage = wbEl.parentElement;
+    var aw = stage.clientWidth - 28;
+    var ah = stage.clientHeight - 165;
+    if (aw <= 0 || ah <= 0) return;
+    var k = Math.min(aw / CW, ah / CH);
+    wbWrap.style.width = Math.max(320, Math.floor(CW * k)) + 'px';
+    wbWrap.style.height = Math.max(180, Math.floor(CH * k)) + 'px';
+  }
+  window.addEventListener('resize', fitWb);
+
+  var wbG = null;   // { cols, rows, tile, ox, oy } — 서버가 알려 준 맵 규격
+  function wbIdxC(tx, ty) { return ty * wbG.cols + tx; }
+  function wbTX(px) { return Math.floor((px - wbG.ox) / wbG.tile); }
+  function wbTY(py) { return Math.floor((py - wbG.oy) / wbG.tile); }
+  function wbCXc(tx) { return wbG.ox + (tx + 0.5) * wbG.tile; }
+  function wbCYc(ty) { return wbG.oy + (ty + 0.5) * wbG.tile; }
+  function wbLeft(tx) { return wbG.ox + tx * wbG.tile; }
+  function wbTop(ty) { return wbG.oy + ty * wbG.tile; }
+
+  // ── 내 캐릭터 예측 (서버 wbMove 와 같은 규칙) ──
+  function wbSolidC(tx, ty) {
+    if (!wbMap || !wbG) return true;
+    if (tx < 0 || ty < 0 || tx >= wbG.cols || ty >= wbG.rows) return true;
+    var v = wbMap[wbIdxC(tx, ty)];
+    if (v === 1 || v === 2) return true;
+    var bs = wbState.balloons, i;
+    for (i = 0; i < bs.length; i++) {
+      if (bs[i][0] !== tx || bs[i][1] !== ty) continue;
+      // 지금 그 칸 위에 서 있다면 (방금 내가 놓은 풍선) 통과
+      if (wbTX(wbMine.x) === tx && wbTY(wbMine.y) === ty) return false;
+      return true;
+    }
+    return false;
+  }
+
+  function wbBlockedC(x, y) {
+    var h = WBC.half;
+    var x0 = wbTX(x - h), x1 = wbTX(x + h);
+    var y0 = wbTY(y - h), y1 = wbTY(y + h);
+    for (var ty = y0; ty <= y1; ty++) {
+      for (var tx = x0; tx <= x1; tx++) if (wbSolidC(tx, ty)) return true;
+    }
+    return false;
+  }
+
+  function wbStepC(dx, dy) {
+    if (!dx && !dy) return false;
+    if (wbBlockedC(wbMine.x + dx, wbMine.y + dy)) return false;
+    wbMine.x += dx; wbMine.y += dy;
+    return true;
+  }
+
+  function wbGlideC(axis, dt) {
+    var cur = axis === 'x' ? wbMine.x : wbMine.y;
+    var mid = axis === 'x' ? wbCXc(wbTX(wbMine.x)) : wbCYc(wbTY(wbMine.y));
+    var d = mid - cur;
+    if (Math.abs(d) < 0.5) return;
+    var step = (d < 0 ? -1 : 1) * Math.min(Math.abs(d), WBC.glide * dt);
+    if (axis === 'x') wbStepC(step, 0); else wbStepC(0, step);
+  }
+
+  function wbPredict(dt) {
+    var s = wbState;
+    if (!s || !s.on || s.phase !== 'play' || !wbMine || !wbMap) return;
+    if (!wbMine.alive || wbMine.trapped) return;
+    var vx = 0, vy = 0;
+    if (wbKeys.l) vx -= 1;
+    if (wbKeys.r) vx += 1;
+    if (wbKeys.u) vy -= 1;
+    if (wbKeys.d) vy += 1;
+    if (!vx && !vy) return;
+    if (vx && vy) { vx *= 0.7071; vy *= 0.7071; }
+    wbMine.dir = vx ? (vx > 0 ? 'r' : 'l') : (vy > 0 ? 'd' : 'u');
+    var sp = (WBC.baseSpeed + wbMine.speed * WBC.speedStep) * dt;
+    var okX = wbStepC(vx * sp, 0);
+    var okY = wbStepC(0, vy * sp);
+    if (vx && !okX) wbGlideC('y', dt);
+    if (vy && !okY) wbGlideC('x', dt);
+  }
+
+  /** 서버가 보내 준 내 위치로 살살 당겨 맞춘다 (크게 어긋났으면 바로 붙인다) */
+  function wbSync(m) {
+    if (m.map) wbMap = m.map.split('').map(Number);
+    if (!m.on) { wbMine = null; wbView = {}; wbMap = null; wbG = null; return; }
+    wbG = { cols: m.cols, rows: m.rows, tile: m.tile, ox: m.ox, oy: m.oy };
+
+    var srv = null;
+    m.players.forEach(function (p) { if (p.i === me.id) srv = p; });
+    if (!srv) { wbMine = null; return; }
+
+    if (!wbMine || m.phase !== 'play' || !srv.a || srv.t) {
+      wbMine = { x: srv.x, y: srv.y, dir: srv.d, speed: srv.sp, alive: srv.a, trapped: srv.t };
+      return;
+    }
+    wbMine.speed = srv.sp;
+    wbMine.alive = srv.a;
+    wbMine.trapped = srv.t;
+    if (Math.hypot(srv.x - wbMine.x, srv.y - wbMine.y) > 42) {
+      wbMine.x = srv.x; wbMine.y = srv.y;
+    } else {
+      wbMine.x += (srv.x - wbMine.x) * 0.14;
+      wbMine.y += (srv.y - wbMine.y) * 0.14;
+    }
+  }
+
+  // ── 키 입력 ──
+  var wbKeys = { u: false, d: false, l: false, r: false };
+  var wbSent = '';
+  function wbPush(force) {
+    var sig = (wbKeys.u ? 1 : 0) + '' + (wbKeys.d ? 1 : 0) + (wbKeys.l ? 1 : 0) + (wbKeys.r ? 1 : 0);
+    if (!force && sig === wbSent) return;
+    wbSent = sig;
+    send({ t: 'wb', act: 'input', u: wbKeys.u, d: wbKeys.d, l: wbKeys.l, r: wbKeys.r });
+  }
+  function wbOnKey(e, down) {
+    if (mode !== 'wb') return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (e.code === 'Space' || e.code === 'Enter') {
+      e.preventDefault();
+      if (down && !e.repeat) send({ t: 'wb', act: 'drop' });
+      return;
+    }
+    var k = KEYMAP[e.code];
+    if (!k) return;
+    e.preventDefault();
+    if (wbKeys[k] === down) return;
+    wbKeys[k] = down;
+    wbPush();
+  }
+  document.addEventListener('keydown', function (e) { wbOnKey(e, true); });
+  document.addEventListener('keyup', function (e) { wbOnKey(e, false); });
+  window.addEventListener('blur', function () {
+    wbKeys = { u: false, d: false, l: false, r: false };
+    if (wbState && wbState.on) wbPush(true);
+  });
+
+  document.getElementById('wbStart').addEventListener('click', function () {
+    if (wbState && wbState.on && wbState.phase !== 'done' &&
+        !confirm('진행 중인 물풍선 판이 있습니다. 새로 시작할까요?')) return;
+    send({
+      t: 'wb', act: 'start',
+      bombs: Number(document.getElementById('wbBombs').value),
+      power: Number(document.getElementById('wbPower').value),
+    });
+  });
+  document.getElementById('wbEnd').addEventListener('click', function () {
+    if (confirm('물풍선을 종료할까요?')) send({ t: 'wb', act: 'end' });
+  });
+
+  // ── 그리기 ──
+  var WB_ITEM = ['💧', '🎈', '👟'];
+
+  function roundRect(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  function drawWb() {
+    var s = wbState;
+    wc.fillStyle = '#0d1220';
+    wc.fillRect(0, 0, CW, CH);
+
+    if (!s || !s.on || !wbMap || !wbG) {
+      wc.fillStyle = 'rgba(255,255,255,.35)';
+      wc.font = '700 34px system-ui, sans-serif';
+      wc.textAlign = 'center';
+      wc.fillText('게임 시작을 누르면 판이 열립니다', CW / 2, CH / 2);
+      wc.textAlign = 'left';
+      return;
+    }
+
+    var T = wbG.tile, now = Date.now();
+
+    // 바닥
+    for (var ty = 0; ty < wbG.rows; ty++) {
+      for (var tx = 0; tx < wbG.cols; tx++) {
+        var X = wbLeft(tx), Y = wbTop(ty);
+        var v = wbMap[wbIdxC(tx, ty)];
+        if (v === 1) {
+          wc.fillStyle = '#3b4457';
+          wc.fillRect(X, Y, T, T);
+          wc.fillStyle = '#535e75';
+          wc.fillRect(X + 3, Y + 3, T - 6, T - 12);
+          wc.fillStyle = 'rgba(255,255,255,.10)';
+          wc.fillRect(X + 3, Y + 3, T - 6, 6);
+        } else if (v === 2) {
+          wc.fillStyle = '#8a5a33';
+          roundRect(wc, X + 3, Y + 3, T - 6, T - 6, 8); wc.fill();
+          wc.strokeStyle = 'rgba(0,0,0,.35)';
+          wc.lineWidth = 4;
+          wc.beginPath();
+          wc.moveTo(X + 8, Y + 8); wc.lineTo(X + T - 8, Y + T - 8);
+          wc.moveTo(X + T - 8, Y + 8); wc.lineTo(X + 8, Y + T - 8);
+          wc.stroke();
+          wc.fillStyle = 'rgba(255,255,255,.12)';
+          wc.fillRect(X + 6, Y + 6, T - 12, 5);
+        } else {
+          wc.fillStyle = ((tx + ty) % 2) ? '#182236' : '#1c2740';
+          wc.fillRect(X, Y, T, T);
+        }
+      }
+    }
+
+    // 아이템
+    wc.textAlign = 'center';
+    wc.textBaseline = 'middle';
+    s.items.forEach(function (it) {
+      var X = wbLeft(it[0]), Y = wbTop(it[1]);
+      var bob = Math.sin(now / 260 + it[0] + it[1]) * 3;
+      wc.fillStyle = 'rgba(255,255,255,.90)';
+      roundRect(wc, X + 10, Y + 10 + bob, T - 20, T - 20, 10); wc.fill();
+      wc.font = '30px system-ui, sans-serif';
+      wc.fillText(WB_ITEM[it[2]] || '?', X + T / 2, Y + T / 2 + bob + 1);
+    });
+
+    // 물줄기 — 물풍선이 터진 자리
+    s.water.forEach(function (w) {
+      var X = wbLeft(w[0]), Y = wbTop(w[1]);
+      var pulse = 0.55 + 0.25 * Math.sin(now / 90 + w[0] + w[1]);
+      wc.fillStyle = 'rgba(56,189,248,' + pulse.toFixed(2) + ')';
+      if (w[2] === 0) { roundRect(wc, X + 2, Y + 2, T - 4, T - 4, 14); wc.fill(); }
+      else if (w[2] === 1) { roundRect(wc, X, Y + 12, T, T - 24, 10); wc.fill(); }
+      else { roundRect(wc, X + 12, Y, T - 24, T, 10); wc.fill(); }
+      wc.fillStyle = 'rgba(224,247,255,.75)';
+      wc.beginPath();
+      wc.arc(X + T / 2, Y + T / 2, 9 + 3 * Math.sin(now / 70 + w[0]), 0, Math.PI * 2);
+      wc.fill();
+    });
+
+    // 물풍선 — 터질 때가 가까울수록 크게 부푼다
+    s.balloons.forEach(function (b) {
+      var cx = wbCXc(b[0]), cy = wbCYc(b[1]);
+      var ratio = 1 - Math.max(0, Math.min(1, b[2] / (s.fuse || 3000)));
+      var r = T * 0.30 + ratio * 6 + Math.sin(now / (70 - ratio * 45)) * (2 + ratio * 4);
+      wc.fillStyle = 'rgba(0,0,0,.35)';
+      wc.beginPath(); wc.ellipse(cx, cy + r * 0.8, r * 0.85, r * 0.3, 0, 0, Math.PI * 2); wc.fill();
+      var grd = wc.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.15, cx, cy, r);
+      grd.addColorStop(0, '#bff0ff');
+      grd.addColorStop(0.55, '#38bdf8');
+      grd.addColorStop(1, '#0b6fa4');
+      wc.fillStyle = grd;
+      wc.beginPath(); wc.arc(cx, cy, r, 0, Math.PI * 2); wc.fill();
+      wc.fillStyle = 'rgba(255,255,255,.85)';
+      wc.beginPath(); wc.arc(cx - r * 0.32, cy - r * 0.36, r * 0.20, 0, Math.PI * 2); wc.fill();
+    });
+
+    // 캐릭터
+    s.players.forEach(function (pl) {
+      var px = pl.x, py = pl.y;
+      if (pl.i === me.id && wbMine) { px = wbMine.x; py = wbMine.y; }
+      else {
+        var v2 = wbView[pl.i];
+        if (!v2) { v2 = wbView[pl.i] = { x: pl.x, y: pl.y }; }
+        v2.x += (pl.x - v2.x) * 0.3;
+        v2.y += (pl.y - v2.y) * 0.3;
+        px = v2.x; py = v2.y;
+      }
+
+      if (!pl.a) {   // 탈락 — 자리만 흐리게 남긴다
+        wc.globalAlpha = 0.22;
+        wc.fillStyle = pl.c;
+        wc.beginPath(); wc.arc(px, py, T * 0.26, 0, Math.PI * 2); wc.fill();
+        wc.globalAlpha = 1;
+        return;
+      }
+
+      var r = T * 0.30;
+      wc.fillStyle = 'rgba(0,0,0,.32)';
+      wc.beginPath(); wc.ellipse(px, py + r * 0.9, r * 0.8, r * 0.28, 0, 0, Math.PI * 2); wc.fill();
+
+      wc.globalAlpha = pl.sf && !pl.t ? (Math.sin(now / 90) > 0 ? 0.45 : 1) : 1;   // 무적이면 깜빡
+      wc.fillStyle = pl.c;
+      wc.beginPath(); wc.arc(px, py, r, 0, Math.PI * 2); wc.fill();
+      wc.strokeStyle = 'rgba(0,0,0,.45)'; wc.lineWidth = 3; wc.stroke();
+
+      // 눈 — 바라보는 쪽으로
+      var ex = pl.d === 'l' ? -r * 0.28 : pl.d === 'r' ? r * 0.28 : 0;
+      var ey = pl.d === 'u' ? -r * 0.30 : r * 0.10;
+      wc.fillStyle = '#fff';
+      wc.beginPath(); wc.arc(px + ex - r * 0.24, py + ey, r * 0.20, 0, Math.PI * 2); wc.fill();
+      wc.beginPath(); wc.arc(px + ex + r * 0.24, py + ey, r * 0.20, 0, Math.PI * 2); wc.fill();
+      wc.fillStyle = '#111';
+      wc.beginPath(); wc.arc(px + ex * 1.4 - r * 0.24, py + ey, r * 0.09, 0, Math.PI * 2); wc.fill();
+      wc.beginPath(); wc.arc(px + ex * 1.4 + r * 0.24, py + ey, r * 0.09, 0, Math.PI * 2); wc.fill();
+      wc.globalAlpha = 1;
+
+      // 물방울에 갇힘
+      if (pl.t) {
+        var br = r * 1.55 + Math.sin(now / 200 + pl.i) * 2;
+        wc.fillStyle = 'rgba(125,211,252,.28)';
+        wc.beginPath(); wc.arc(px, py, br, 0, Math.PI * 2); wc.fill();
+        wc.strokeStyle = 'rgba(186,230,253,.9)'; wc.lineWidth = 3;
+        wc.beginPath(); wc.arc(px, py, br, 0, Math.PI * 2); wc.stroke();
+        wc.fillStyle = 'rgba(255,255,255,.6)';
+        wc.beginPath(); wc.arc(px - br * 0.35, py - br * 0.4, br * 0.16, 0, Math.PI * 2); wc.fill();
+        // 남은 시간 고리
+        var left = Math.max(0, pl.tl) / (s.trapMs || 6500);
+        wc.strokeStyle = left < 0.34 ? '#f87171' : '#e0f2fe';
+        wc.lineWidth = 5;
+        wc.beginPath();
+        wc.arc(px, py, br + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left);
+        wc.stroke();
+        wc.fillStyle = '#fff';
+        wc.font = '700 20px system-ui, sans-serif';
+        wc.fillText(Math.ceil(pl.tl / 1000) + '', px, py - br - 16);
+      }
+
+      // 이름
+      wc.font = '700 15px system-ui, sans-serif';
+      wc.fillStyle = 'rgba(0,0,0,.55)';
+      var nw = wc.measureText(pl.n).width + 12;
+      roundRect(wc, px - nw / 2, py - r - 30, nw, 20, 9); wc.fill();
+      wc.fillStyle = pl.i === me.id ? '#fde68a' : '#fff';
+      wc.fillText(pl.n, px, py - r - 20);
+    });
+
+    wc.textAlign = 'left';
+    wc.textBaseline = 'alphabetic';
+  }
+
+  function wbFrame(ts) {
+    requestAnimationFrame(wbFrame);
+    if (mode !== 'wb') { wbLast = ts; return; }
+    var dt = Math.min(0.05, (ts - wbLast) / 1000 || 0);
+    wbLast = ts;
+    wbPredict(dt);
+    drawWb();
+  }
+  requestAnimationFrame(wbFrame);
+
+  function renderWbHud() {
+    var s = wbState;
+    wbStandEl.innerHTML = '';
+
+    if (!s || !s.on) {
+      wbStatusEl.textContent = '물풍선이 시작되지 않았습니다';
+      wbBig.style.display = 'none';
+      return;
+    }
+
+    if (s.phase === 'countdown') {
+      wbBig.style.display = '';
+      wbBig.innerHTML = '';
+      wbBig.appendChild(document.createTextNode(String(Math.ceil(s.countdown / 1000))));
+      var sm = document.createElement('small');
+      sm.textContent = '방향키로 이동 · 스페이스바로 물풍선';
+      wbBig.appendChild(sm);
+      wbStatusEl.textContent = '곧 시작합니다';
+    } else if (s.phase === 'done') {
+      wbBig.style.display = '';
+      wbBig.innerHTML = '';
+      wbBig.appendChild(document.createTextNode(s.winner ? '🏆' : '🤝'));
+      var sm2 = document.createElement('small');
+      var win = null;
+      (s.results || []).forEach(function (r) { if (r.id === s.winner) win = r; });
+      sm2.textContent = win ? win.name + ' 님 우승!' : '무승부';
+      wbBig.appendChild(sm2);
+      wbStatusEl.textContent = '끝났습니다 — 다시 시작하려면 게임 시작';
+    } else {
+      wbBig.style.display = 'none';
+      var alive = 0;
+      s.players.forEach(function (p) { if (p.a) alive++; });
+      wbStatusEl.innerHTML = '';
+      var hl = document.createElement('span');
+      hl.className = 'hl';
+      hl.textContent = alive + '명 생존';
+      wbStatusEl.appendChild(hl);
+      wbStatusEl.appendChild(document.createTextNode(' · 남은 시간 ' + Math.ceil(s.left / 1000) + '초'));
+    }
+
+    var list = s.players.slice();
+    if (s.phase === 'done' && s.results) {
+      var rank = {};
+      s.results.forEach(function (r) { rank[r.id] = r.rank; });
+      list.sort(function (a, b) { return (rank[a.i] || 99) - (rank[b.i] || 99); });
+    }
+    list.forEach(function (p) {
+      var el = document.createElement('div');
+      el.className = 'r' + (p.i === me.id ? ' me' : '') + (p.a ? '' : ' fin');
+      var dot = document.createElement('i');
+      dot.style.background = p.c;
+      el.appendChild(dot);
+      el.appendChild(document.createTextNode(p.n + (p.i === me.id ? '(나)' : '') + ' '));
+      var em = document.createElement('em');
+      em.textContent = !p.a ? '탈락 · 가둠 ' + p.k
+        : p.t ? '🫧 갇힘 ' + Math.ceil(p.tl / 1000) + '초'
+        : '🎈' + p.bm + ' 💧' + p.pw + ' 👟' + p.sp + ' · 가둠 ' + p.k;
+      el.appendChild(em);
+      wbStandEl.appendChild(el);
+    });
+  }
+
   // ── 이름 ────────────────────────────────────────
   var nameInput = document.getElementById('nameInput');
   var savedName = '';
@@ -2516,6 +2981,19 @@
           if (!m.on) { flight = null; lastShotId = 0; }
           renderArch();
           if (!archWasOn && m.on) { setMode('arch'); fitArch(); }
+          break;
+
+        case 'wb':
+          var wbWasOn = !!(wbState && wbState.on);
+          var wbPrev = wbState ? wbState.phase : null;
+          wbState = m;
+          wbSync(m);
+          if (m.on && m.phase !== wbPrev && m.phase === 'play') wbPush(true);
+          if (m.phase !== wbPrev || Date.now() - wbHud > 200) {
+            wbHud = Date.now();
+            renderWbHud();
+          }
+          if (!wbWasOn && m.on) { setMode('wb'); fitWb(); }
           break;
 
         case 'race':

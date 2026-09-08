@@ -1164,6 +1164,384 @@ function sendRace(only) {
   for (const c of targets) send(c, msg);
 }
 
+// ── 물풍선 (크레이지아케이드 식) ───────────────────
+// 물풍선을 놓으면 잠시 뒤 십자로 물줄기가 뻗는다. 물줄기에 닿은 사람은 물방울에 갇히고,
+// 제한 시간 안에 누군가의 물줄기가 다시 닿아 주면 풀려난다. 못 풀려나면 터져서 탈락.
+// 마지막까지 남은 한 명이 이긴다.
+//
+// 이동·폭발·판정은 전부 여기(서버)에서 한다. 클라이언트가 보내는 것은
+// 방향키 눌림 상태와 "풍선 놓기" 요청뿐이고, 나머지는 서버가 다시 계산한다.
+const WB = {
+  tile: 72, cols: 21, rows: 12,
+  ox: 44, oy: 18,              // 1600x900 캔버스 안에서 맵 왼쪽 위 여백
+  tickMs: 50,                  // 초당 20번
+  half: 23,                    // 캐릭터 충돌 상자 반크기 (칸 36의 2/3 정도)
+  baseSpeed: 175, speedStep: 32, maxSpeed: 4,
+  fuse: 3000,                  // 풍선이 터지기까지
+  waterMs: 700,                // 물줄기가 남아 있는 시간
+  trapMs: 6500,                // 물방울에 갇혀 버틸 수 있는 시간
+  safeMs: 1600,                // 풀려난 직후 무적
+  maxPower: 6, maxBombs: 6,
+  boxRate: 0.42,               // 빈칸이 상자가 될 확률
+  itemRate: 0.36,              // 상자가 아이템을 떨굴 확률
+  glide: 130,                  // 복도로 밀어 넣어 주는 보정 속도
+  limitMs: 180000,             // 3분
+};
+
+// 출발 자리 — 앞의 4개가 서로 가장 멀다. 격자 벽(짝수,짝수)과 겹치지 않는 칸만 골랐다.
+const WB_SPAWNS = [
+  [1, 1], [19, 10], [19, 1], [1, 10],
+  [9, 1], [11, 10], [1, 5], [19, 5],
+];
+
+let wb = null;
+let wbTimer = null;
+
+const wbIdx = (tx, ty) => ty * WB.cols + tx;
+const wbTileX = (px) => Math.floor((px - WB.ox) / WB.tile);
+const wbTileY = (py) => Math.floor((py - WB.oy) / WB.tile);
+const wbCX = (tx) => WB.ox + (tx + 0.5) * WB.tile;
+const wbCY = (ty) => WB.oy + (ty + 0.5) * WB.tile;
+const wbName = (id) => { const c = clients.get(id); return c ? c.name : '나간 사람'; };
+
+/** 0 빈칸 · 1 못 부수는 벽 · 2 상자 */
+function wbGenMap() {
+  const m = new Array(WB.cols * WB.rows).fill(0);
+  for (let y = 0; y < WB.rows; y++) {
+    for (let x = 0; x < WB.cols; x++) {
+      let v;
+      if (x === 0 || y === 0 || x === WB.cols - 1 || y === WB.rows - 1) v = 1;
+      else if (x % 2 === 0 && y % 2 === 0) v = 1;   // 가운데 격자 기둥
+      else v = Math.random() < WB.boxRate ? 2 : 0;
+      m[wbIdx(x, y)] = v;
+    }
+  }
+  // 출발 자리와 그 둘레는 상자를 치워 나올 길을 만들어 준다
+  const around = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[2,0],[-2,0],[0,2],[0,-2]];
+  for (const sp of WB_SPAWNS) {
+    for (const d of around) {
+      const tx = sp[0] + d[0], ty = sp[1] + d[1];
+      if (tx < 1 || ty < 1 || tx >= WB.cols - 1 || ty >= WB.rows - 1) continue;
+      if (m[wbIdx(tx, ty)] === 2) m[wbIdx(tx, ty)] = 0;
+    }
+  }
+  return m;
+}
+
+function wbSolid(tx, ty, forId) {
+  if (tx < 0 || ty < 0 || tx >= WB.cols || ty >= WB.rows) return true;
+  const v = wb.map[wbIdx(tx, ty)];
+  if (v === 1 || v === 2) return true;
+  for (const b of wb.balloons) {
+    if (b.tx !== tx || b.ty !== ty) continue;
+    // 발밑에 생긴 풍선은 그 칸에서 완전히 빠져나갈 때까지 통과시켜 준다
+    const p = wb.players.get(forId);
+    if (p && p.ghost && p.ghost.tx === tx && p.ghost.ty === ty) return false;
+    return true;
+  }
+  return false;
+}
+
+/** 충돌 상자가 어떤 칸이라도 막힌 칸에 걸치는가 */
+function wbBlocked(x, y, id) {
+  const h = WB.half;
+  const x0 = wbTileX(x - h), x1 = wbTileX(x + h);
+  const y0 = wbTileY(y - h), y1 = wbTileY(y + h);
+  for (let ty = y0; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) if (wbSolid(tx, ty, id)) return true;
+  }
+  return false;
+}
+
+function wbOverlaps(p, tx, ty) {
+  const h = WB.half;
+  return wbTileX(p.x - h) <= tx && tx <= wbTileX(p.x + h) &&
+         wbTileY(p.y - h) <= ty && ty <= wbTileY(p.y + h);
+}
+
+function wbStep(p, dx, dy) {
+  if (!dx && !dy) return false;
+  if (wbBlocked(p.x + dx, p.y + dy, p.id)) return false;
+  p.x += dx; p.y += dy;
+  return true;
+}
+
+/** 진행 방향이 막혔을 때 직각축을 칸 가운데로 당겨 준다 (복도에 잘 들어가도록) */
+function wbGlide(p, axis, dt) {
+  const cur = axis === 'x' ? p.x : p.y;
+  const mid = axis === 'x' ? wbCX(wbTileX(p.x)) : wbCY(wbTileY(p.y));
+  const d = mid - cur;
+  if (Math.abs(d) < 0.5) return;
+  const step = Math.sign(d) * Math.min(Math.abs(d), WB.glide * dt);
+  if (axis === 'x') wbStep(p, step, 0); else wbStep(p, 0, step);
+}
+
+function wbMove(p, dt) {
+  if (!p.alive || p.trapped) return;
+  let vx = 0, vy = 0;
+  if (p.input.l) vx -= 1;
+  if (p.input.r) vx += 1;
+  if (p.input.u) vy -= 1;
+  if (p.input.d) vy += 1;
+  if (!vx && !vy) return;
+  if (vx && vy) { vx *= 0.7071; vy *= 0.7071; }
+  p.dir = vx ? (vx > 0 ? 'r' : 'l') : (vy > 0 ? 'd' : 'u');
+
+  const sp = (WB.baseSpeed + p.speed * WB.speedStep) * dt;
+  const okX = wbStep(p, vx * sp, 0);
+  const okY = wbStep(p, 0, vy * sp);
+  if (vx && !okX) wbGlide(p, 'y', dt);
+  if (vy && !okY) wbGlide(p, 'x', dt);
+}
+
+function wbPlace(p) {
+  if (!wb || wb.phase !== 'play' || !p.alive || p.trapped) return;
+  const tx = wbTileX(p.x), ty = wbTileY(p.y);
+  if (tx < 0 || ty < 0 || tx >= WB.cols || ty >= WB.rows) return;
+  if (wb.map[wbIdx(tx, ty)] !== 0) return;
+  if (wb.balloons.some((b) => b.tx === tx && b.ty === ty)) return;
+  let mine = 0;
+  for (const b of wb.balloons) if (b.owner === p.id) mine++;
+  if (mine >= p.bombs) return;
+
+  wb.balloons.push({ tx, ty, owner: p.id, power: p.power, at: Date.now() });
+  // 그 칸에 서 있던 사람은 모두 빠져나갈 때까지 통과 허용
+  for (const q of wb.players.values()) {
+    if (q.alive && wbOverlaps(q, tx, ty)) q.ghost = { tx, ty };
+  }
+}
+
+function wbDropItem(tx, ty) {
+  if (Math.random() >= WB.itemRate) return;
+  wb.items.push({ tx, ty, k: crypto.randomInt(3) });   // 0 물줄기 · 1 풍선 · 2 스피드
+}
+
+/** 풍선 하나를 터뜨린다. 물줄기가 닿은 다른 풍선은 연쇄로 함께 터진다. */
+function wbExplode(first) {
+  const now = Date.now();
+  const bs = ++wb.burstSeq;   // 이 폭발의 번호 — 한 폭발이 같은 사람을 두 번 건드리지 않게 한다
+  const queue = [first];
+  const seen = new Set([first]);
+  const cells = new Map();
+  const drops = [];   // 부서진 상자 자리 — 아이템은 물줄기 정리가 끝난 뒤에 놓는다
+
+  const put = (tx, ty, k, by) => {
+    const key = tx + ',' + ty;
+    const old = cells.get(key);
+    if (!old) { cells.set(key, { tx, ty, k, by }); return; }
+    if (old.k !== k) old.k = 0;   // 가로와 세로가 겹치면 십자로 그린다
+  };
+
+  const dirs = [[1, 0, 1], [-1, 0, 1], [0, 1, 2], [0, -1, 2]];
+  while (queue.length) {
+    const b = queue.shift();
+    const i = wb.balloons.indexOf(b);
+    if (i >= 0) wb.balloons.splice(i, 1);
+    put(b.tx, b.ty, 0, b.owner);
+
+    for (const d of dirs) {
+      for (let step = 1; step <= b.power; step++) {
+        const tx = b.tx + d[0] * step, ty = b.ty + d[1] * step;
+        if (tx < 0 || ty < 0 || tx >= WB.cols || ty >= WB.rows) break;
+        const v = wb.map[wbIdx(tx, ty)];
+        if (v === 1) break;                       // 못 부수는 벽에서 멈춘다
+        if (v === 2) {                            // 상자는 하나만 부수고 멈춘다
+          wb.map[wbIdx(tx, ty)] = 0;
+          wb.mapDirty = true;
+          drops.push([tx, ty]);
+          put(tx, ty, d[2], b.owner);
+          break;
+        }
+        put(tx, ty, d[2], b.owner);
+        const other = wb.balloons.find((o) => o.tx === tx && o.ty === ty);
+        if (other && !seen.has(other)) { seen.add(other); queue.push(other); }
+      }
+    }
+  }
+
+  for (const c of cells.values()) {
+    // 물줄기가 지나간 자리의 아이템은 쓸려 나간다
+    for (let i = wb.items.length - 1; i >= 0; i--) {
+      if (wb.items[i].tx === c.tx && wb.items[i].ty === c.ty) wb.items.splice(i, 1);
+    }
+    for (let i = wb.water.length - 1; i >= 0; i--) {
+      if (wb.water[i].tx === c.tx && wb.water[i].ty === c.ty) wb.water.splice(i, 1);
+    }
+    wb.water.push({ tx: c.tx, ty: c.ty, k: c.k, by: c.by, bs, until: now + WB.waterMs });
+  }
+
+  // 상자에서 나온 아이템은 위 정리가 끝난 뒤에 놓는다.
+  // (같은 폭발의 물줄기가 방금 드러낸 아이템을 다시 쓸어가면 안 된다)
+  for (const d of drops) wbDropItem(d[0], d[1]);
+}
+
+function wbLoopOn() { if (!wbTimer) wbTimer = setInterval(wbTick, WB.tickMs); }
+function wbLoopOff() { if (wbTimer) { clearInterval(wbTimer); wbTimer = null; } }
+
+function wbFinish(winnerId, why) {
+  const order = [];
+  for (const p of wb.players.values()) if (p.alive) order.push(p.id);   // 살아남은 사람 먼저
+  for (const id of wb.rank) if (order.indexOf(id) < 0) order.push(id);  // 늦게 터진 순서
+  for (const p of wb.players.values()) if (order.indexOf(p.id) < 0) order.push(p.id);
+
+  wb.phase = 'done';
+  wb.winner = winnerId || null;
+  wb.results = order.map((id, i) => {
+    const p = wb.players.get(id);
+    return {
+      id, rank: i + 1, name: wbName(id),
+      alive: !!(p && p.alive),
+      catches: p ? p.catches : 0,
+      pops: p ? p.pops : 0,
+      saves: p ? p.saves : 0,
+    };
+  });
+  wbLoopOff();
+  broadcast({
+    t: 'sys',
+    text: why || (winnerId ? `🏆 ${wbName(winnerId)} 님이 최후의 1인!` : '물풍선 — 무승부로 끝났습니다'),
+  });
+  sendWB();
+}
+
+function wbTick() {
+  if (!wb) return wbLoopOff();
+  const now = Date.now();
+  const dt = WB.tickMs / 1000;
+
+  if (wb.phase === 'countdown') {
+    if (now >= wb.startAt) {
+      wb.phase = 'play';
+      broadcast({ t: 'sys', text: '💧 물풍선 시작!' });
+    }
+    sendWB();
+    return;
+  }
+  if (wb.phase !== 'play') { wbLoopOff(); return; }
+
+  for (const p of wb.players.values()) {
+    if (!clients.has(p.id)) continue;
+    wbMove(p, dt);
+    if (p.ghost && !wbOverlaps(p, p.ghost.tx, p.ghost.ty)) p.ghost = null;
+  }
+
+  // 아이템 줍기
+  for (let i = wb.items.length - 1; i >= 0; i--) {
+    const it = wb.items[i];
+    for (const p of wb.players.values()) {
+      if (!p.alive || p.trapped || !clients.has(p.id)) continue;
+      if (wbTileX(p.x) !== it.tx || wbTileY(p.y) !== it.ty) continue;
+      if (it.k === 0) p.power = Math.min(WB.maxPower, p.power + 1);
+      else if (it.k === 1) p.bombs = Math.min(WB.maxBombs, p.bombs + 1);
+      else p.speed = Math.min(WB.maxSpeed, p.speed + 1);
+      wb.items.splice(i, 1);
+      break;
+    }
+  }
+
+  // 터질 때가 된 풍선 (연쇄 때문에 목록이 바뀌므로 매번 다시 찾는다)
+  for (;;) {
+    const b = wb.balloons.find((x) => now - x.at >= WB.fuse);
+    if (!b) break;
+    wbExplode(b);
+  }
+
+  for (let i = wb.water.length - 1; i >= 0; i--) {
+    if (wb.water[i].until <= now) wb.water.splice(i, 1);
+  }
+
+  // 물줄기 판정 — 발밑 한 칸만 본다 (모서리에 스쳤다고 갇히면 억울하다)
+  for (const p of wb.players.values()) {
+    if (!p.alive || !clients.has(p.id)) continue;
+    const tx = wbTileX(p.x), ty = wbTileY(p.y);
+    const hit = wb.water.find((w) => w.tx === tx && w.ty === ty);
+    if (!hit) continue;
+    // 물줄기는 0.7초 남아 있다. 같은 폭발이 매 틱마다 다시 판정되면
+    // 가두자마자 그 물줄기가 스스로 풀어 주게 되므로 폭발당 한 번만 적용한다.
+    if (hit.bs === p.lastBurst) continue;
+    p.lastBurst = hit.bs;
+
+    if (p.trapped) {
+      // 갇힌 사람에게 물줄기가 닿으면 풀려난다 (누구 물줄기든)
+      p.trapped = false; p.trapUntil = 0; p.safeUntil = now + WB.safeMs;
+      const saver = wb.players.get(hit.by);
+      if (saver && hit.by !== p.id) saver.saves++;
+    } else if (now > p.safeUntil) {
+      p.trapped = true;
+      p.trapUntil = now + WB.trapMs;
+      p.by = hit.by;
+      p.input = { u: false, d: false, l: false, r: false };
+      const catcher = wb.players.get(hit.by);
+      if (catcher && hit.by !== p.id) catcher.catches++;
+    }
+  }
+
+  // 물방울이 터지면 탈락
+  for (const p of wb.players.values()) {
+    if (!p.alive || !p.trapped || now < p.trapUntil) continue;
+    p.alive = false; p.trapped = false;
+    wb.rank.unshift(p.id);
+    const killer = p.by && p.by !== p.id ? wb.players.get(p.by) : null;
+    if (killer) killer.pops++;
+    broadcast({
+      t: 'sys',
+      text: `💥 ${wbName(p.id)} 님 탈락` + (killer ? ` — ${wbName(killer.id)} 님의 물풍선` : ''),
+    });
+  }
+
+  const live = [...wb.players.values()].filter((p) => p.alive && clients.has(p.id));
+  if (wb.total >= 2 && live.length <= 1) {
+    wbFinish(live.length === 1 ? live[0].id : null);
+    return;
+  }
+  if (wb.total === 1 && live.length === 0) { wbFinish(null); return; }
+  if (now - wb.startAt > WB.limitMs) { wbFinish(null, '⏱ 물풍선 — 제한시간 종료'); return; }
+
+  sendWB();
+}
+
+function sendWB(only) {
+  const targets = only ? [only] : [...clients.values()];
+
+  if (!wb) {
+    for (const c of targets) send(c, { t: 'wb', on: false });
+    return;
+  }
+
+  const now = Date.now();
+  const msg = {
+    t: 'wb', on: true,
+    phase: wb.phase,
+    cols: WB.cols, rows: WB.rows, tile: WB.tile, ox: WB.ox, oy: WB.oy,
+    fuse: WB.fuse, trapMs: WB.trapMs,
+    countdown: wb.phase === 'countdown' ? Math.max(0, wb.startAt - now) : 0,
+    left: wb.phase === 'play' ? Math.max(0, WB.limitMs - (now - wb.startAt)) : 0,
+    players: [...wb.players.values()].filter((p) => clients.has(p.id)).map((p) => ({
+      i: p.id,
+      n: wbName(p.id),
+      c: clients.get(p.id).color,
+      x: Math.round(p.x), y: Math.round(p.y), d: p.dir,
+      a: p.alive, t: p.trapped,
+      tl: p.trapped ? Math.max(0, p.trapUntil - now) : 0,
+      sf: p.safeUntil > now,
+      pw: p.power, bm: p.bombs, sp: p.speed,
+      k: p.catches, o: p.pops, v: p.saves,
+    })),
+    balloons: wb.balloons.map((b) => [b.tx, b.ty, Math.max(0, WB.fuse - (now - b.at))]),
+    water: wb.water.map((w) => [w.tx, w.ty, w.k]),
+    items: wb.items.map((it) => [it.tx, it.ty, it.k]),
+    results: wb.results || null,
+    winner: wb.winner || null,
+  };
+
+  // 맵은 매 틱 보낼 필요가 없다. 새로 들어온 사람, 시작 카운트다운,
+  // 상자가 부서져 바뀐 틱에만 실어 보내고 클라이언트가 들고 쓴다.
+  if (only || wb.mapDirty || wb.phase === 'countdown') msg.map = wb.map.join('');
+  if (!only) wb.mapDirty = false;
+
+  for (const c of targets) send(c, msg);
+}
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -1259,6 +1637,16 @@ server.on('upgrade', (req, socket) => {
       endRace('참가자가 모두 나가 레이스를 종료합니다');
       sendRace();
     }
+    if (wb) {
+      // 나간 사람은 그 자리에서 빠진다. 남은 사람이 1명 이하가 되면 다음 틱이 정리한다.
+      const p = wb.players.get(id);
+      if (p) { p.alive = false; p.trapped = false; }
+      if (wb.phase === 'play' && ![...wb.players.keys()].some((pid) => clients.has(pid))) {
+        wbFinish(null, '참가자가 모두 나가 물풍선을 종료합니다');
+      } else {
+        sendWB();
+      }
+    }
     console.log(`[-] ${client.name} 접속 종료 (현재 ${clients.size}명)`);
   };
 
@@ -1285,6 +1673,7 @@ server.on('upgrade', (req, socket) => {
   sendLiar(liar ? undefined : client);
   sendRace(client);   // 진행 중인 레이스는 관전만 (다음 판부터 참여)
   sendArch(client);   // 활쏘기도 마찬가지
+  sendWB(client);     // 물풍선도 마찬가지
 
   console.log(`[+] ${client.name} 접속 (현재 ${clients.size}명)`);
 
@@ -1315,6 +1704,7 @@ function handle(client, text) {
       if (liar) sendLiar();
       if (arch) sendArch();
       if (race) sendRace();
+      if (wb) sendWB();
       return;
     }
 
@@ -1421,6 +1811,78 @@ function handle(client, text) {
         arch = null;
         broadcast({ t: 'sys', text: `${client.name} 님이 활쏘기를 종료했습니다` });
         sendArch();
+        return;
+      }
+      return;
+    }
+
+    case 'wb': {
+      if (msg.act === 'start') {
+        const ids = [...clients.keys()].sort((a, b) => a - b);
+        if (!ids.length) return;
+
+        const picked = shuffleIds(ids).slice(0, WB_SPAWNS.length);
+        const power = Math.round(clamp(num(msg.power) ?? 1, 1, WB.maxPower));
+        const bombs = Math.round(clamp(num(msg.bombs) ?? 1, 1, WB.maxBombs));
+
+        wbLoopOff();
+        const now = Date.now();
+        wb = {
+          phase: 'countdown',
+          startAt: now + 3200,
+          map: wbGenMap(), mapDirty: false,
+          balloons: [], water: [], items: [],
+          players: new Map(), rank: [],
+          burstSeq: 0,
+          results: null, winner: null,
+          total: picked.length,
+        };
+        picked.forEach((id, i) => {
+          const sp = WB_SPAWNS[i];
+          wb.players.set(id, {
+            id, x: wbCX(sp[0]), y: wbCY(sp[1]), dir: 'd',
+            alive: true, trapped: false, trapUntil: 0,
+            safeUntil: now + 3600,          // 카운트다운 동안은 못 가둔다
+            by: 0, ghost: null, lastBurst: 0,
+            power, bombs, speed: 0,
+            input: { u: false, d: false, l: false, r: false },
+            catches: 0, pops: 0, saves: 0,
+          });
+        });
+
+        const over = ids.length - picked.length;
+        broadcast({
+          t: 'sys',
+          text: `${client.name} 님이 물풍선을 시작했습니다 — ${picked.length}명` +
+            (over > 0 ? ` (자리가 8개라 ${over}명은 관전)` : ''),
+        });
+        wbLoopOn();
+        sendWB();
+        console.log(`[=] 물풍선 시작 — ${picked.length}명, 풍선 ${bombs} 물줄기 ${power}`);
+        return;
+      }
+
+      if (msg.act === 'input') {
+        if (!wb || wb.phase !== 'play') return;
+        const p = wb.players.get(client.id);
+        if (!p || !p.alive || p.trapped) return;
+        p.input = { u: !!msg.u, d: !!msg.d, l: !!msg.l, r: !!msg.r };
+        return;
+      }
+
+      if (msg.act === 'drop') {
+        if (!wb || wb.phase !== 'play') return;
+        const p = wb.players.get(client.id);
+        if (p) wbPlace(p);
+        return;
+      }
+
+      if (msg.act === 'end') {
+        if (!wb) return;
+        wb = null;
+        wbLoopOff();
+        broadcast({ t: 'sys', text: `${client.name} 님이 물풍선을 종료했습니다` });
+        sendWB();
         return;
       }
       return;
