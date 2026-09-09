@@ -2415,10 +2415,25 @@
 
   var wbState = null;
   var wbMap = null;          // 숫자 배열 (0 빈칸 · 1 벽 · 2 상자)
+  var wbMapStr = '';        // 바닥을 다시 그릴지 판단하는 열쇠
   var wbMine = null;         // 내 캐릭터의 예측 위치 { x, y, dir }
-  var wbView = {};           // 남들 위치를 부드럽게 따라가는 값
   var wbLast = 0;
   var wbHud = 0;
+
+  // 서버가 매 틱 보내지 않는 것들은 받아서 들고 쓴다
+  var wbMeta = { fuse: 3000, trapMs: 6500 };
+  var wbWho = {};            // id → { n: 이름, c: 색 }
+
+  // 남의 캐릭터는 20Hz 로 오는 서버 값 사이를 시간에 맞춰 채워 그린다.
+  // 프레임마다 조금씩 따라가는 방식은 늘 뒤처지고 프레임률에 따라 속도가 달라진다.
+  var wbLerp = {};           // id → { ax, ay, bx, by, t0, dur, last }
+
+  // 벽·상자·바닥은 상자가 부서질 때만 바뀐다. 매 프레임 250칸을 다시 칠하지 않도록
+  // 따로 그려 두고 통째로 붙인다.
+  var wbBase = document.createElement('canvas');
+  wbBase.width = CW; wbBase.height = CH;
+  var wbBaseCtx = wbBase.getContext('2d');
+  var wbBaseKey = null;
 
   function fitWb() {
     var stage = wbEl.parentElement;
@@ -2501,14 +2516,55 @@
     if (vy && !okY) wbGlideC('x', dt);
   }
 
-  /** 서버가 보내 준 내 위치로 살살 당겨 맞춘다 (크게 어긋났으면 바로 붙인다) */
+  /**
+   * 서버 상태를 받아 정리한다.
+   * - 이름·색·맵 규격은 서버가 바뀔 때만 보내므로 받아서 캐시에 넣는다
+   * - 내 캐릭터는 예측값을 서버 값으로 살살 당겨 맞춘다 (많이 어긋나면 바로 붙인다)
+   * - 남의 캐릭터는 보간용 구간(ax→bx)을 갱신한다
+   */
   function wbSync(m) {
-    if (m.map) wbMap = m.map.split('').map(Number);
-    if (!m.on) { wbMine = null; wbView = {}; wbMap = null; wbG = null; return; }
-    wbG = { cols: m.cols, rows: m.rows, tile: m.tile, ox: m.ox, oy: m.oy };
+    if (m.map) { wbMapStr = m.map; wbMap = m.map.split('').map(Number); }
+    if (m.cols) {
+      wbG = { cols: m.cols, rows: m.rows, tile: m.tile, ox: m.ox, oy: m.oy };
+      wbMeta = { fuse: m.fuse || 3000, trapMs: m.trapMs || 6500 };
+    }
+    if (!m.on) {
+      wbMine = null; wbLerp = {}; wbWho = {};
+      wbMap = null; wbMapStr = ''; wbG = null; wbBaseKey = null;
+      return;
+    }
 
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     var srv = null;
-    m.players.forEach(function (p) { if (p.i === me.id) srv = p; });
+
+    for (var i = 0; i < m.players.length; i++) {
+      var pl = m.players[i];
+      if (pl.n) wbWho[pl.i] = { n: pl.n, c: pl.c };   // 이름·색이 실려 온 틱에만 갱신
+      if (pl.i === me.id) { srv = pl; continue; }
+
+      var v = wbLerp[pl.i];
+      if (!v) {
+        wbLerp[pl.i] = { ax: pl.x, ay: pl.y, bx: pl.x, by: pl.y, t0: now, dur: 50, last: now };
+        continue;
+      }
+      // 새 판이 시작돼 자리가 튀면 보간하지 않고 바로 옮긴다
+      if (Math.hypot(pl.x - v.bx, pl.y - v.by) > 300) {
+        v.ax = v.bx = pl.x; v.ay = v.by = pl.y;
+        v.t0 = now; v.dur = 50; v.last = now;
+        continue;
+      }
+      var dur = now - v.last;
+      if (!(dur > 10 && dur < 400)) dur = 50;   // 한 번 크게 끊겼으면 기본값으로
+      v.ax = v.bx; v.ay = v.by;
+      v.bx = pl.x; v.by = pl.y;
+      v.t0 = now; v.dur = dur; v.last = now;
+    }
+
+    // 목록에서 사라진 사람은 보간 상태도 지운다
+    var alive = {};
+    for (var j = 0; j < m.players.length; j++) alive[m.players[j].i] = 1;
+    for (var k in wbLerp) if (!alive[k]) delete wbLerp[k];
+
     if (!srv) { wbMine = null; return; }
 
     if (!wbMine || m.phase !== 'play' || !srv.a || srv.t) {
@@ -2518,12 +2574,22 @@
     wbMine.speed = srv.sp;
     wbMine.alive = srv.a;
     wbMine.trapped = srv.t;
-    if (Math.hypot(srv.x - wbMine.x, srv.y - wbMine.y) > 42) {
+    if (Math.hypot(srv.x - wbMine.x, srv.y - wbMine.y) > 48) {
       wbMine.x = srv.x; wbMine.y = srv.y;
     } else {
-      wbMine.x += (srv.x - wbMine.x) * 0.14;
-      wbMine.y += (srv.y - wbMine.y) * 0.14;
+      wbMine.x += (srv.x - wbMine.x) * 0.12;
+      wbMine.y += (srv.y - wbMine.y) * 0.12;
     }
+  }
+
+  /** 남의 캐릭터를 지금 시각에 맞춰 어디에 그릴지 */
+  function wbAt(id, fx, fy) {
+    var v = wbLerp[id];
+    if (!v) return { x: fx, y: fy };
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    var t = (now - v.t0) / v.dur;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    return { x: v.ax + (v.bx - v.ax) * t, y: v.ay + (v.by - v.ay) * t };
   }
 
   // ── 키 입력 ──
@@ -2588,6 +2654,41 @@
     g.closePath();
   }
 
+  /** 바닥·벽·상자만 별도 캔버스에 그린다 (맵이 바뀔 때만 호출) */
+  function wbDrawBase() {
+    var g = wbBaseCtx, T = wbG.tile;
+    g.fillStyle = '#0d1220';
+    g.fillRect(0, 0, CW, CH);
+    for (var ty = 0; ty < wbG.rows; ty++) {
+      for (var tx = 0; tx < wbG.cols; tx++) {
+        var X = wbLeft(tx), Y = wbTop(ty);
+        var v = wbMap[wbIdxC(tx, ty)];
+        if (v === 1) {
+          g.fillStyle = '#3b4457';
+          g.fillRect(X, Y, T, T);
+          g.fillStyle = '#535e75';
+          g.fillRect(X + 3, Y + 3, T - 6, T - 12);
+          g.fillStyle = 'rgba(255,255,255,.10)';
+          g.fillRect(X + 3, Y + 3, T - 6, 6);
+        } else if (v === 2) {
+          g.fillStyle = '#8a5a33';
+          roundRect(g, X + 3, Y + 3, T - 6, T - 6, 8); g.fill();
+          g.strokeStyle = 'rgba(0,0,0,.35)';
+          g.lineWidth = 4;
+          g.beginPath();
+          g.moveTo(X + 8, Y + 8); g.lineTo(X + T - 8, Y + T - 8);
+          g.moveTo(X + T - 8, Y + 8); g.lineTo(X + 8, Y + T - 8);
+          g.stroke();
+          g.fillStyle = 'rgba(255,255,255,.12)';
+          g.fillRect(X + 6, Y + 6, T - 12, 5);
+        } else {
+          g.fillStyle = ((tx + ty) % 2) ? '#182236' : '#1c2740';
+          g.fillRect(X, Y, T, T);
+        }
+      }
+    }
+  }
+
   function drawWb() {
     var s = wbState;
     wc.fillStyle = '#0d1220';
@@ -2604,35 +2705,9 @@
 
     var T = wbG.tile, now = Date.now();
 
-    // 바닥
-    for (var ty = 0; ty < wbG.rows; ty++) {
-      for (var tx = 0; tx < wbG.cols; tx++) {
-        var X = wbLeft(tx), Y = wbTop(ty);
-        var v = wbMap[wbIdxC(tx, ty)];
-        if (v === 1) {
-          wc.fillStyle = '#3b4457';
-          wc.fillRect(X, Y, T, T);
-          wc.fillStyle = '#535e75';
-          wc.fillRect(X + 3, Y + 3, T - 6, T - 12);
-          wc.fillStyle = 'rgba(255,255,255,.10)';
-          wc.fillRect(X + 3, Y + 3, T - 6, 6);
-        } else if (v === 2) {
-          wc.fillStyle = '#8a5a33';
-          roundRect(wc, X + 3, Y + 3, T - 6, T - 6, 8); wc.fill();
-          wc.strokeStyle = 'rgba(0,0,0,.35)';
-          wc.lineWidth = 4;
-          wc.beginPath();
-          wc.moveTo(X + 8, Y + 8); wc.lineTo(X + T - 8, Y + T - 8);
-          wc.moveTo(X + T - 8, Y + 8); wc.lineTo(X + 8, Y + T - 8);
-          wc.stroke();
-          wc.fillStyle = 'rgba(255,255,255,.12)';
-          wc.fillRect(X + 6, Y + 6, T - 12, 5);
-        } else {
-          wc.fillStyle = ((tx + ty) % 2) ? '#182236' : '#1c2740';
-          wc.fillRect(X, Y, T, T);
-        }
-      }
-    }
+    // 바닥·벽·상자는 상자가 부서질 때만 바뀐다. 바뀌었을 때만 다시 그려 두고 붙인다.
+    if (wbBaseKey !== wbMapStr) { wbDrawBase(); wbBaseKey = wbMapStr; }
+    wc.drawImage(wbBase, 0, 0);
 
     // 아이템
     wc.textAlign = 'center';
@@ -2663,10 +2738,12 @@
     // 물풍선 — 터질 때가 가까울수록 크게 부푼다
     s.balloons.forEach(function (b) {
       var cx = wbCXc(b[0]), cy = wbCYc(b[1]);
-      var ratio = 1 - Math.max(0, Math.min(1, b[2] / (s.fuse || 3000)));
+      var ratio = 1 - Math.max(0, Math.min(1, b[2] / wbMeta.fuse));
       var r = T * 0.30 + ratio * 6 + Math.sin(now / (70 - ratio * 45)) * (2 + ratio * 4);
       wc.fillStyle = 'rgba(0,0,0,.35)';
       wc.beginPath(); wc.ellipse(cx, cy + r * 0.8, r * 0.85, r * 0.3, 0, 0, Math.PI * 2); wc.fill();
+      // 그라디언트 비용을 재 보니 원 겹치기와 차이가 없었다 (0.024 vs 0.025 ms/프레임).
+      // 더 예쁜 쪽을 쓴다.
       var grd = wc.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.15, cx, cy, r);
       grd.addColorStop(0, '#bff0ff');
       grd.addColorStop(0.55, '#38bdf8');
@@ -2679,19 +2756,14 @@
 
     // 캐릭터
     s.players.forEach(function (pl) {
-      var px = pl.x, py = pl.y;
+      var who = wbWho[pl.i] || { n: '?', c: '#888888' };
+      var px, py;
       if (pl.i === me.id && wbMine) { px = wbMine.x; py = wbMine.y; }
-      else {
-        var v2 = wbView[pl.i];
-        if (!v2) { v2 = wbView[pl.i] = { x: pl.x, y: pl.y }; }
-        v2.x += (pl.x - v2.x) * 0.3;
-        v2.y += (pl.y - v2.y) * 0.3;
-        px = v2.x; py = v2.y;
-      }
+      else { var at = wbAt(pl.i, pl.x, pl.y); px = at.x; py = at.y; }
 
       if (!pl.a) {   // 탈락 — 자리만 흐리게 남긴다
         wc.globalAlpha = 0.22;
-        wc.fillStyle = pl.c;
+        wc.fillStyle = who.c;
         wc.beginPath(); wc.arc(px, py, T * 0.26, 0, Math.PI * 2); wc.fill();
         wc.globalAlpha = 1;
         return;
@@ -2702,7 +2774,7 @@
       wc.beginPath(); wc.ellipse(px, py + r * 0.9, r * 0.8, r * 0.28, 0, 0, Math.PI * 2); wc.fill();
 
       wc.globalAlpha = pl.sf && !pl.t ? (Math.sin(now / 90) > 0 ? 0.45 : 1) : 1;   // 무적이면 깜빡
-      wc.fillStyle = pl.c;
+      wc.fillStyle = who.c;
       wc.beginPath(); wc.arc(px, py, r, 0, Math.PI * 2); wc.fill();
       wc.strokeStyle = 'rgba(0,0,0,.45)'; wc.lineWidth = 3; wc.stroke();
 
@@ -2727,7 +2799,7 @@
         wc.fillStyle = 'rgba(255,255,255,.6)';
         wc.beginPath(); wc.arc(px - br * 0.35, py - br * 0.4, br * 0.16, 0, Math.PI * 2); wc.fill();
         // 남은 시간 고리
-        var left = Math.max(0, pl.tl) / (s.trapMs || 6500);
+        var left = Math.max(0, pl.tl) / wbMeta.trapMs;
         wc.strokeStyle = left < 0.34 ? '#f87171' : '#e0f2fe';
         wc.lineWidth = 5;
         wc.beginPath();
@@ -2741,10 +2813,10 @@
       // 이름
       wc.font = '700 15px system-ui, sans-serif';
       wc.fillStyle = 'rgba(0,0,0,.55)';
-      var nw = wc.measureText(pl.n).width + 12;
+      var nw = wc.measureText(who.n).width + 12;
       roundRect(wc, px - nw / 2, py - r - 30, nw, 20, 9); wc.fill();
       wc.fillStyle = pl.i === me.id ? '#fde68a' : '#fff';
-      wc.fillText(pl.n, px, py - r - 20);
+      wc.fillText(who.n, px, py - r - 20);
     });
 
     wc.textAlign = 'left';
@@ -2810,10 +2882,11 @@
     list.forEach(function (p) {
       var el = document.createElement('div');
       el.className = 'r' + (p.i === me.id ? ' me' : '') + (p.a ? '' : ' fin');
+      var who2 = wbWho[p.i] || { n: '?', c: '#888888' };
       var dot = document.createElement('i');
-      dot.style.background = p.c;
+      dot.style.background = who2.c;
       el.appendChild(dot);
-      el.appendChild(document.createTextNode(p.n + (p.i === me.id ? '(나)' : '') + ' '));
+      el.appendChild(document.createTextNode(who2.n + (p.i === me.id ? '(나)' : '') + ' '));
       var em = document.createElement('em');
       em.textContent = !p.a ? '탈락 · 가둠 ' + p.k
         : p.t ? '🫧 갇힘 ' + Math.ceil(p.tl / 1000) + '초'

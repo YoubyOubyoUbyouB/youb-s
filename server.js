@@ -347,16 +347,27 @@ function cellOf(clientId) {
   return { x0: cx * cw, y0: cy * ch, x1: (cx + 1) * cw, y1: (cy + 1) * ch };
 }
 
-function send(c, obj) {
+/** 한 번 만들어 둔 프레임을 그대로 여러 소켓에 쓴다 */
+function writeFrame(c, frame) {
   if (c.socket.destroyed) return;
-  try {
-    c.socket.write(encodeFrame(0x1, Buffer.from(JSON.stringify(obj), 'utf8')));
-  } catch { /* 끊긴 소켓은 무시 */ }
+  try { c.socket.write(frame); } catch { /* 끊긴 소켓은 무시 */ }
 }
 
+function frameOf(obj) {
+  return encodeFrame(0x1, Buffer.from(JSON.stringify(obj), 'utf8'));
+}
+
+function send(c, obj) {
+  writeFrame(c, frameOf(obj));
+}
+
+// 여러 명에게 같은 것을 보낼 때는 직렬화를 한 번만 한다.
+// (사람 수만큼 JSON.stringify 를 반복하면 그게 그대로 서버 부하가 된다)
 function broadcast(obj, exceptId) {
+  if (!clients.size) return;
+  const frame = frameOf(obj);
   for (const c of clients.values()) {
-    if (c.id !== exceptId) send(c, obj);
+    if (c.id !== exceptId) writeFrame(c, frame);
   }
 }
 
@@ -1375,8 +1386,37 @@ function wbExplode(first) {
   for (const d of drops) wbDropItem(d[0], d[1]);
 }
 
-function wbLoopOn() { if (!wbTimer) wbTimer = setInterval(wbTick, WB.tickMs); }
-function wbLoopOff() { if (wbTimer) { clearInterval(wbTimer); wbTimer = null; } }
+// setInterval 은 콜백에 걸린 시간만큼 뒤로 밀린다. 20Hz 로 돌리려 했는데
+// 실제로는 17Hz 로 도는 식이라, 다음 시각을 기준으로 두고 남은 만큼만 기다린다.
+let wbRunning = false;
+
+function wbLoopOn() {
+  if (wbRunning) return;
+  wbRunning = true;
+  let next = Date.now() + WB.tickMs;
+
+  const step = () => {
+    wbTimer = null;
+    if (!wbRunning) return;
+    wbTick();
+    if (!wbRunning) return;
+    next += WB.tickMs;
+    let delay = next - Date.now();
+    if (delay < 0) {
+      // 크게 밀렸으면 따라잡으려 몰아서 돌리지 않고 기준을 다시 잡는다
+      next = Date.now() + WB.tickMs;
+      delay = WB.tickMs;
+    }
+    wbTimer = setTimeout(step, delay);
+  };
+
+  wbTimer = setTimeout(step, WB.tickMs);
+}
+
+function wbLoopOff() {
+  wbRunning = false;
+  if (wbTimer) { clearTimeout(wbTimer); wbTimer = null; }
+}
 
 function wbFinish(winnerId, why) {
   const order = [];
@@ -1407,7 +1447,10 @@ function wbFinish(winnerId, why) {
 function wbTick() {
   if (!wb) return wbLoopOff();
   const now = Date.now();
-  const dt = WB.tickMs / 1000;
+  // 틱이 밀려도 이동 거리가 맞도록 실제 경과 시간을 쓴다.
+  // 벽을 뚫지 않게 상한을 둔다 (0.1초 × 최고속도 303px/s = 30px < 칸 72px)
+  const dt = Math.min(0.1, Math.max(0.001, (now - (wb.lastTick || now - WB.tickMs)) / 1000));
+  wb.lastTick = now;
 
   if (wb.phase === 'countdown') {
     if (now >= wb.startAt) {
@@ -1509,24 +1552,30 @@ function sendWB(only) {
   }
 
   const now = Date.now();
+
+  // 맵은 새로 들어온 사람, 카운트다운, 상자가 부서진 틱에만 실어 보낸다.
+  const wantMap = !!only || wb.mapDirty || wb.phase === 'countdown';
+  // 이름·색은 사람이 들고나거나 이름을 바꿀 때만 보낸다. 매 틱 실으면 그게 절반이다.
+  const wantRoster = !!only || wb.rosterSent !== wb.rosterRev;
+
   const msg = {
     t: 'wb', on: true,
     phase: wb.phase,
-    cols: WB.cols, rows: WB.rows, tile: WB.tile, ox: WB.ox, oy: WB.oy,
-    fuse: WB.fuse, trapMs: WB.trapMs,
     countdown: wb.phase === 'countdown' ? Math.max(0, wb.startAt - now) : 0,
     left: wb.phase === 'play' ? Math.max(0, WB.limitMs - (now - wb.startAt)) : 0,
-    players: [...wb.players.values()].filter((p) => clients.has(p.id)).map((p) => ({
-      i: p.id,
-      n: wbName(p.id),
-      c: clients.get(p.id).color,
-      x: Math.round(p.x), y: Math.round(p.y), d: p.dir,
-      a: p.alive, t: p.trapped,
-      tl: p.trapped ? Math.max(0, p.trapUntil - now) : 0,
-      sf: p.safeUntil > now,
-      pw: p.power, bm: p.bombs, sp: p.speed,
-      k: p.catches, o: p.pops, v: p.saves,
-    })),
+    players: [...wb.players.values()].filter((p) => clients.has(p.id)).map((p) => {
+      const o = {
+        i: p.id,
+        x: Math.round(p.x), y: Math.round(p.y), d: p.dir,
+        a: p.alive, t: p.trapped,
+        tl: p.trapped ? Math.max(0, p.trapUntil - now) : 0,
+        sf: p.safeUntil > now,
+        pw: p.power, bm: p.bombs, sp: p.speed,
+        k: p.catches, o: p.pops, v: p.saves,
+      };
+      if (wantRoster) { o.n = wbName(p.id); o.c = clients.get(p.id).color; }
+      return o;
+    }),
     balloons: wb.balloons.map((b) => [b.tx, b.ty, Math.max(0, WB.fuse - (now - b.at))]),
     water: wb.water.map((w) => [w.tx, w.ty, w.k]),
     items: wb.items.map((it) => [it.tx, it.ty, it.k]),
@@ -1534,12 +1583,22 @@ function sendWB(only) {
     winner: wb.winner || null,
   };
 
-  // 맵은 매 틱 보낼 필요가 없다. 새로 들어온 사람, 시작 카운트다운,
-  // 상자가 부서져 바뀐 틱에만 실어 보내고 클라이언트가 들고 쓴다.
-  if (only || wb.mapDirty || wb.phase === 'countdown') msg.map = wb.map.join('');
-  if (!only) wb.mapDirty = false;
+  if (wantMap) {
+    msg.map = wb.map.join('');
+    // 맵을 보낼 때 규격도 같이 준다 (매 틱 보낼 이유가 없는 상수들)
+    msg.cols = WB.cols; msg.rows = WB.rows; msg.tile = WB.tile;
+    msg.ox = WB.ox; msg.oy = WB.oy;
+    msg.fuse = WB.fuse; msg.trapMs = WB.trapMs;
+  }
+  if (!only) {
+    wb.mapDirty = false;
+    if (wantRoster) wb.rosterSent = wb.rosterRev;
+  }
 
-  for (const c of targets) send(c, msg);
+  // 여러 명에게 같은 것을 보낼 때는 한 번만 직렬화한다
+  if (targets.length === 1) { send(targets[0], msg); return; }
+  const frame = frameOf(msg);
+  for (const c of targets) writeFrame(c, frame);
 }
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -1641,6 +1700,7 @@ server.on('upgrade', (req, socket) => {
       // 나간 사람은 그 자리에서 빠진다. 남은 사람이 1명 이하가 되면 다음 틱이 정리한다.
       const p = wb.players.get(id);
       if (p) { p.alive = false; p.trapped = false; }
+      wb.rosterRev++;
       if (wb.phase === 'play' && ![...wb.players.keys()].some((pid) => clients.has(pid))) {
         wbFinish(null, '참가자가 모두 나가 물풍선을 종료합니다');
       } else {
@@ -1704,7 +1764,7 @@ function handle(client, text) {
       if (liar) sendLiar();
       if (arch) sendArch();
       if (race) sendRace();
-      if (wb) sendWB();
+      if (wb) { wb.rosterRev++; sendWB(); }   // 바뀐 이름을 한 번 실어 보낸다
       return;
     }
 
@@ -1834,6 +1894,8 @@ function handle(client, text) {
           balloons: [], water: [], items: [],
           players: new Map(), rank: [],
           burstSeq: 0,
+          rosterRev: 1, rosterSent: 0,   // 이름·색이 바뀌면 rosterRev 를 올린다
+          lastTick: 0,
           results: null, winner: null,
           total: picked.length,
         };
