@@ -27,3 +27,16 @@ services:
       - path: /*
         name: X-Robots-Tag
         value: noindex, nofollow
+
+  # 메모(위장 낚시 게임) — memo/ 폴더만 올리는 정적 사이트.
+  # 받는 사람은 이 주소를 Edge 로 열어 "앱으로 설치"하면 작은 창으로 쓴다.
+  # 게임 기록·메모 내용은 각자 브라우저에만 저장되고 서버로 오지 않는다.
+  - type: web
+    name: youb-memo
+    runtime: static
+    staticPublishPath: ./memo
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: X-Robots-Tag
+        value: noindex, nofollow

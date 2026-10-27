@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 제목과 아이콘은 게임 중에도 메모장 그대로 둔다 (작업표시줄에 보이는 것) -->
+<title>제목 없음 - 메모장</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='22' height='26' rx='3' fill='%23fff' stroke='%232b6cb0' stroke-width='2'/%3E%3Crect x='5' y='3' width='22' height='6' rx='2' fill='%232b6cb0'/%3E%3Cpath d='M9 14h14M9 19h14M9 24h9' stroke='%232b6cb0' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light dark;
+    --np-bg: #ffffff; --np-fg: #1b1b1b; --np-chrome: #f3f3f3; --np-line: #e5e5e5;
+    --np-tab: #ffffff; --np-muted: #5c5c5c; --np-hover: #ebebeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --np-bg: #272727; --np-fg: #ffffff; --np-chrome: #202020; --np-line: #383838;
+      --np-tab: #272727; --np-muted: #c5c5c5; --np-hover: #333333;
+    }
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d3b5e; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "맑은 고딕", "Malgun Gothic", sans-serif; }
+  [hidden] { display: none !important; }
+
+  /* ── 게임 ─────────────────────────────── */
+  #game { position: fixed; inset: 0; user-select: none; }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+  #hud { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 8px; align-items: center; pointer-events: none; }
+  #hud > * { pointer-events: auto; }
+  .pill { background: rgba(0, 0, 0, .42); color: #fff; border-radius: 999px; padding: 6px 13px; font-size: 14px; font-weight: 600; }
+  #hud .sp { flex: 1; pointer-events: none; }
+  #hud button {
+    width: 36px; height: 36px; border-radius: 10px; border: none; cursor: pointer;
+    background: rgba(0, 0, 0, .42); color: #fff; font-size: 17px; font-family: inherit;
+  }
+  #hud button:hover { background: rgba(0, 0, 0, .62); }
+  #msg {
+    position: absolute; left: 50%; top: 20%; transform: translateX(-50%);
+    color: #fff; font-size: 28px; font-weight: 800; white-space: nowrap; pointer-events: none;
+    text-shadow: 0 3px 12px rgba(0, 0, 0, .6); opacity: 0; transition: opacity .18s;
+  }
+  #msg.on { opacity: 1; }
+  #help {
+    position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; pointer-events: none;
+    color: rgba(255, 255, 255, .8); font-size: 12px; text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+  }
+
+  .ov { position: absolute; inset: 0; background: rgba(3, 15, 28, .55); display: flex; align-items: center; justify-content: center; }
+  .card {
+    background: #fffdf7; color: #222; border-radius: 16px; padding: 20px 22px;
+    width: min(560px, 92vw); max-height: 84vh; overflow: auto; box-sizing: border-box;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, .45);
+  }
+  .card h2 { margin: 0 0 4px; font-size: 18px; }
+  .card .sub { color: #777; font-size: 13px; margin-bottom: 14px; }
+  .btn {
+    border: none; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 700;
+    background: #2b6cb0; color: #fff; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { background: #245a94; }
+  .btn:disabled { background: #b8c2cc; cursor: default; }
+  .btn.ghost { background: #eef1f4; color: #333; }
+  .btn.ghost:hover { background: #e2e7ec; }
+  .btn.warn { background: #c0392b; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .badge { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; color: #fff; }
+
+  .catch { text-align: center; width: min(380px, 92vw); }
+  #catchCv { width: 240px; height: 110px; display: block; margin: 4px auto 8px; }
+  .cname { font-size: 22px; font-weight: 800; display: flex; gap: 8px; align-items: center; justify-content: center; }
+  .cinfo { color: #555; margin: 8px 0 4px; font-size: 15px; }
+  .cnew { color: #d35400; font-weight: 800; min-height: 20px; margin-bottom: 12px; }
+  .junk { font-size: 64px; line-height: 110px; height: 110px; }
+
+  .dex { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  .dex .it { border: 1px solid #ece6d8; border-radius: 10px; padding: 6px 6px 8px; text-align: center; background: #fff; }
+  .dex canvas { width: 100px; height: 46px; display: block; margin: 0 auto; }
+  .dex .n { font-weight: 700; font-size: 13px; margin-top: 2px; }
+  .dex .m { font-size: 11px; color: #888; }
+  .dex .it.no .n { color: #aaa; }
+
+  .shop .item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #eee; }
+  .shop .item:first-of-type { border-top: none; }
+  .shop .ic { font-size: 30px; width: 40px; text-align: center; }
+  .shop .tx { flex: 1; }
+  .shop .tx b { font-size: 15px; }
+  .shop .tx div { font-size: 12px; color: #777; margin-top: 2px; }
+
+  .set .line { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-top: 1px solid #eee; font-size: 14px; }
+  .set .line:first-of-type { border-top: none; }
+  .set select { font-family: inherit; font-size: 14px; padding: 5px 8px; border-radius: 8px; border: 1px solid #ccd; }
+  .set .hint { font-size: 12px; color: #888; margin-top: 2px; }
+  .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+  /* ── 작은 창 (구석에 띄워 두는 크기) ──────── */
+  @media (max-width: 560px), (max-height: 380px) {
+    #hud { top: 4px; left: 4px; right: 4px; gap: 4px; }
+    .pill { font-size: 10.5px; padding: 2px 7px; }
+    #hud button { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; padding: 0; }
+    #help { display: none; }
+    #msg { font-size: 15px; top: 16%; }
+    .card { padding: 10px 12px; border-radius: 10px; width: 94vw; max-height: 92vh; }
+    .card h2 { font-size: 14px; }
+    .card .sub { font-size: 11px; margin-bottom: 6px; }
+    .btn { padding: 5px 10px; font-size: 12px; border-radius: 7px; }
+    .badge { font-size: 10px; padding: 1px 6px; }
+    .catch { width: 94vw; }
+    #catchCv { width: 120px; height: 55px; margin: 0 auto 2px; }
+    .junk { font-size: 34px; line-height: 55px; height: 55px; }
+    .cname { font-size: 15px; gap: 6px; }
+    .cinfo { font-size: 12px; margin: 3px 0 2px; }
+    .cnew { font-size: 12px; min-height: 0; margin-bottom: 6px; }
+    .dex { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 4px; }
+    .dex .it { padding: 3px 3px 5px; border-radius: 7px; }
+    .dex canvas { width: 60px; height: 28px; }
+    .dex .n { font-size: 11px; }
+    .dex .m { font-size: 9.5px; }
+    .shop .item { padding: 6px 0; gap: 8px; }
+    .shop .ic { font-size: 18px; width: 22px; }
+    .shop .tx b { font-size: 12px; }
+    .shop .tx div { font-size: 10.5px; }
+    .set .line { padding: 6px 0; font-size: 12px; gap: 8px; }
+    .set .hint { font-size: 10px; }
+    .set select { font-size: 11px; padding: 2px 4px; }
+    .foot { margin-top: 8px; }
+
+    .np-tabs { height: 28px; padding: 0 4px; }
+    .np-tab { height: 24px; min-width: 110px; font-size: 11px; padding: 0 4px 0 9px; gap: 6px; border-radius: 6px 6px 0 0; }
+    .np-tab .x { width: 18px; height: 18px; font-size: 9px; }
+    .np-plus { height: 22px; width: 24px; font-size: 13px; }
+    .np-menu { height: 26px; font-size: 11.5px; }
+    .np-menu .m { padding: 3px 8px; }
+    .np-gear { width: 24px; height: 20px; font-size: 12px; }
+    .np-drop { top: 24px; min-width: 190px; font-size: 11.5px; }
+    .np-drop .d { padding: 4px 9px; gap: 16px; }
+    #memoText { font-size: 12.5px; padding: 4px 8px; }
+    .np-status { height: 20px; font-size: 10.5px; }
+    .np-status span { padding: 0 8px; }
+    .np-status .opt { display: none; }
+  }
+
+  /* ── 메모장 (Windows 11 메모장 모양) ──────── */
+  #memo {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    background: var(--np-bg); color: var(--np-fg);
+    font-family: "Segoe UI Variable Text", "Segoe UI", "맑은 고딕", sans-serif; font-size: 12.5px;
+  }
+  .np-tabs { height: 40px; background: var(--np-chrome); display: flex; align-items: flex-end; padding: 0 6px; gap: 2px; flex: none; }
+  .np-tab {
+    height: 32px; min-width: 200px; background: var(--np-tab); border-radius: 8px 8px 0 0;
+    display: flex; align-items: center; gap: 10px; padding: 0 6px 0 14px; cursor: default;
+  }
+  .np-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--np-fg); opacity: 0; }
+  .np-tab.dirty .dot { opacity: .75; }
+  .np-tab .x { margin-left: auto; width: 26px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 11px; opacity: .8; }
+  .np-tab .x:hover, .np-plus:hover, .np-gear:hover { background: var(--np-hover); }
+  .np-plus { height: 30px; width: 34px; margin-bottom: 1px; display: flex; align-items: center; justify-content: center; font-size: 17px; border-radius: 6px; cursor: default; }
+  .np-menu { height: 36px; background: var(--np-tab); display: flex; align-items: center; padding: 0 4px; border-bottom: 1px solid var(--np-line); position: relative; flex: none; }
+  .np-menu .m { padding: 6px 11px; border-radius: 5px; cursor: default; }
+  .np-menu .m:hover, .np-menu .m.open { background: var(--np-hover); }
+  .np-gear { margin-left: auto; width: 34px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 5px; font-size: 15px; cursor: default; }
+  .np-drop {
+    position: absolute; top: 34px; z-index: 5; min-width: 250px; padding: 4px;
+    background: var(--np-tab); border: 1px solid var(--np-line); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+  }
+  .np-drop .d { display: flex; justify-content: space-between; gap: 30px; padding: 7px 12px; border-radius: 4px; cursor: default; }
+  .np-drop .d:hover { background: var(--np-hover); }
+  .np-drop .k { opacity: .6; }
+  .np-drop .sep { border-top: 1px solid var(--np-line); margin: 4px 0; }
+  #memoText {
+    flex: 1; border: none; outline: none; resize: none; margin: 0;
+    background: var(--np-bg); color: var(--np-fg);
+    font-family: Consolas, "맑은 고딕", monospace; font-size: 15px; line-height: 1.45;
+    padding: 6px 12px; white-space: pre-wrap; overflow: auto;
+  }
+  .np-status { height: 26px; background: var(--np-chrome); display: flex; align-items: center; color: var(--np-muted); font-size: 12px; flex: none; }
+  .np-status span { padding: 0 14px; white-space: nowrap; }
+  .np-status .grow { flex: 1; padding: 0; }
+  .np-status .r { border-left: 1px solid var(--np-line); }
+</style>
+</head>
+<body>
+
+<div id="game">
+  <canvas id="cv"></canvas>
+  <div id="hud">
+    <div class="pill" id="hGold">💰 0</div>
+    <div class="pill" id="hCount">🐟 0마리</div>
+    <div class="sp"></div>
+    <button id="bDex" title="도감">📖</button>
+    <button id="bShop" title="상점">🛒</button>
+    <button id="bSound" title="소리">🔇</button>
+    <button id="bSet" title="설정">⚙</button>
+    <button id="bHide" title="메모장으로 전환">📝</button>
+  </div>
+  <div id="msg"></div>
+  <div id="help"></div>
+
+  <div class="ov" id="ovTab" hidden>
+    <div class="card">
+      <h2>인터넷 창으로 열림</h2>
+      <div class="sub" id="tabMsg" style="line-height:1.6"></div>
+      <div class="foot">
+        <button class="btn" id="tabInstall" hidden>앱으로 설치</button>
+        <button class="btn ghost" id="tabAnyway">여기서 계속</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovCatch" hidden>
+    <div class="card catch">
+      <canvas id="catchCv" width="480" height="220"></canvas>
+      <div class="junk" id="cJunk" hidden></div>
+      <div class="cname"><span id="cName"></span><span class="badge" id="cRar"></span></div>
+      <div class="cinfo" id="cInfo"></div>
+      <div class="cnew" id="cNew"></div>
+      <button class="btn" id="cOk">계속 (스페이스)</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovDex" hidden>
+    <div class="card">
+      <h2>도감</h2>
+      <div class="sub" id="dexSub"></div>
+      <div class="dex" id="dexGrid"></div>
+      <div class="foot"><button class="btn ghost" data-close>닫기</button></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovShop" hidden>
+    <div class="card shop">
+      <h2>상점</h2>
+      <div class="sub" id="shopSub"></div>
+      <div id="shopList"></div>
+      <div class="foot"><button class="btn ghost" data-close>닫기</button></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovSet" hidden>
+    <div class="card set">
+      <h2>설정</h2>
+      <div class="sub">메모장 전환 방식</div>
+      <div class="line">
+        <div>전환 키<div class="hint">게임 ↔ 메모장을 오가는 키</div></div>
+        <select id="sBoss">
+          <option value="Escape">Esc</option>
+          <option value="Backquote">` (숫자 1 왼쪽)</option>
+          <option value="F2">F2</option>
+        </select>
+      </div>
+      <div class="line">
+        <div>다른 창으로 가면 메모장으로<div class="hint">Alt+Tab 이나 다른 창 클릭 시 자동 전환</div></div>
+        <input type="checkbox" id="sAuto">
+      </div>
+      <div class="line">
+        <div>소리</div>
+        <input type="checkbox" id="sSound">
+      </div>
+      <div class="line">
+        <div>기록 초기화<div class="hint">골드·도감·장비 전부 삭제 (메모 내용은 유지)</div></div>
+        <button class="btn warn" id="sReset">초기화</button>
+      </div>
+      <div class="foot"><button class="btn ghost" data-close>닫기</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="memo" hidden>
+  <div class="np-tabs">
+    <div class="np-tab" id="npTab"><span>제목 없음</span><span class="dot"></span><span class="x">✕</span></div>
+    <div class="np-plus">+</div>
+  </div>
+  <div class="np-menu" id="npMenu">
+    <div class="m" data-menu="file">파일</div>
+    <div class="m" data-menu="edit">편집</div>
+    <div class="m" data-menu="view">보기</div>
+    <div class="np-gear">⚙</div>
+  </div>
+  <textarea id="memoText" spellcheck="false"></textarea>
+  <div class="np-status">
+    <span id="npPos">줄 1, 열 1</span>
+    <span id="npLen">0자</span>
+    <span class="grow"></span>
+    <span class="r opt">100%</span>
+    <span class="r opt">Windows (CRLF)</span>
+    <span class="r">UTF-8</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var W = 960, H = 600, HORIZON = 228;
+  var TEST = /[?&]test\b/.test(location.search);
+
+  // ── 저장 ─────────────────────────────────────
+  var KEY = 'fishmemo.v1';
+  var DEF = {
+    gold: 0, total: 0, dex: {}, rod: 1, bait: 1,
+    sound: false, autoHide: true, boss: 'Escape',
+    memo: null, memoClean: true,
+  };
+  var S = JSON.parse(JSON.stringify(DEF));
+  try {
+    var raw = localStorage.getItem(KEY);
+    if (raw) { var o = JSON.parse(raw); for (var k in o) S[k] = o[k]; }
+  } catch (e) { /* 저장소를 못 쓰면 이번 실행만 기억 */ }
+  if (TEST) S.autoHide = false;
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+  // ── 물고기 ───────────────────────────────────
+  var RAR = [
+    { name: '흔함', color: '#8b95a1', speed: .25, turn: 1.4, drain: .13, gain: .34, bite: 1.0 },
+    { name: '보통', color: '#3fa45b', speed: .35, turn: 1.2, drain: .16, gain: .30, bite: .95 },
+    { name: '희귀', color: '#2f7fe0', speed: .46, turn: 1.0, drain: .19, gain: .26, bite: .9 },
+    { name: '영웅', color: '#9b4ee0', speed: .58, turn: .85, drain: .22, gain: .22, bite: .8 },
+    { name: '전설', color: '#e0a21a', speed: .72, turn: .7, drain: .25, gain: .18, bite: .7 },
+  ];
+  // 초록 칸 움직임 — 누르면 위로, 떼면 아래로
+  // 초록 칸 — 누르면 일정한 속도로 오르고, 떼면 일정한 속도로 내려온다 (관성 없음)
+  //   up/down : 초당 이동량 (막대 전체 = 1)
+  //   resp    : 속도가 바뀌는 빠르기 (클수록 즉각적)
+  //   base/step: 칸 크기 = base + step × (낚싯대 단계 - 1)
+  //   tol     : 물고기가 칸 가장자리에 이만큼 걸쳐도 안에 있는 것으로 친다
+  //   start   : 감기 시작할 때 진행도
+  var ZONE = { up: .75, down: .65, resp: 9, base: .28, step: .04, tol: .025, start: .4 };
+  function zoneSize() { return ZONE.base + ZONE.step * (S.rod - 1); }
+  function inZone(R) { return R.f >= R.zb - ZONE.tol && R.f <= R.zb + R.zs + ZONE.tol; }
+
+  var FISH = [
+    { id: 'mangdung', name: '망둥어', r: 0, color: '#8a7a5c', min: 8, max: 20, price: 6 },
+    { id: 'jeongaeng', name: '전갱이', r: 0, color: '#9fb4c4', min: 15, max: 30, price: 8 },
+    { id: 'godeung', name: '고등어', r: 0, color: '#3f7fa0', min: 20, max: 40, price: 10 },
+    { id: 'bollak', name: '볼락', r: 1, color: '#6b5a4a', min: 12, max: 28, price: 18 },
+    { id: 'noraemi', name: '노래미', r: 1, color: '#8a7440', min: 18, max: 40, price: 20 },
+    { id: 'ureok', name: '우럭', r: 1, color: '#4a4a55', min: 20, max: 50, price: 25 },
+    { id: 'dodari', name: '도다리', r: 2, color: '#a08060', min: 20, max: 45, price: 45, shape: 'flat' },
+    { id: 'gamseong', name: '감성돔', r: 2, color: '#7d8a9a', min: 25, max: 55, price: 60 },
+    { id: 'gwangeo', name: '광어', r: 2, color: '#8c7355', min: 35, max: 80, price: 70, shape: 'flat' },
+    { id: 'chamdom', name: '참돔', r: 3, color: '#e07a7a', min: 30, max: 80, price: 140 },
+    { id: 'nongeo', name: '농어', r: 3, color: '#9aa6ad', min: 40, max: 100, price: 160 },
+    { id: 'bangeo', name: '방어', r: 3, color: '#5b8db8', min: 50, max: 110, price: 180 },
+    { id: 'chamchi', name: '참다랑어', r: 4, color: '#2d4f78', min: 100, max: 250, price: 600 },
+    { id: 'dotsae', name: '돛새치', r: 4, color: '#3a6ea5', min: 120, max: 300, price: 700, shape: 'long' },
+  ];
+  var JUNK = [
+    { name: '낡은 장화', icon: '👢' },
+    { name: '빈 깡통', icon: '🥫' },
+    { name: '미역 한 줌', icon: '🌿' },
+  ];
+
+  var ROD_COST = [0, 150, 400, 900, 2000];   // 다음 단계 가격 (index = 현재 단계)
+  var BAIT_COST = [0, 120, 350, 800];
+  var ROD_MAX = 5, BAIT_MAX = 4;
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+
+  function pickCatch(p) {
+    var b = S.bait - 1, bonus = 1 + .3 * b;
+    var junk = Math.max(3, 10 - 6 * p - 2 * b);
+    var w = [60 - 35 * p, 26, (8 + 12 * p) * bonus, (2 + 7 * p) * bonus, (.25 + 1.8 * p) * bonus];
+    var sum = junk + w[0] + w[1] + w[2] + w[3] + w[4];
+    var x = Math.random() * sum;
+    if (x < junk) return { junk: JUNK[Math.floor(Math.random() * JUNK.length)] };
+    x -= junk;
+    var r = 0;
+    while (r < 4 && x >= w[r]) { x -= w[r]; r++; }
+    var list = FISH.filter(function (f) { return f.r === r; });
+    return { fish: list[Math.floor(Math.random() * list.length)] };
+  }
+
+  // ── 화면 요소 ───────────────────────────────
+  var $ = function (id) { return document.getElementById(id); };
+  var gameEl = $('game'), memoEl = $('memo'), cv = $('cv'), g = cv.getContext('2d');
+  var memoText = $('memoText');
+  var overlays = ['ovCatch', 'ovDex', 'ovShop', 'ovSet', 'ovTab'].map($);
+  function panelOpen() { return overlays.some(function (o) { return !o.hidden; }); }
+
+  // ── 게임 상태 ───────────────────────────────
+  var TIP0 = { x: 330, y: 250 };     // 쉬고 있을 때 낚싯대 끝
+  var TIPB = { x: 120, y: 244 };     // 뒤로 당겼을 때
+  var HAND = { x: 222, y: 386 };
+  var G = {
+    st: 'idle', t: 0, power: 0, pdir: 1,
+    from: null, to: null, p: 0,
+    bob: { x: TIP0.x, y: TIP0.y + 40, s: 1 },
+    wait: 0, nibbleIn: 0, nibble: 0, bite: 0,
+    catchObj: null, reel: null, hold: false,
+  };
+  var T = 0;                         // 배경 연출용 시계
+  var ripples = [], drops = [];
+  var msgTimer = null;
+
+  function msg(text, ms) {
+    var el = $('msg');
+    el.textContent = text;
+    el.classList.add('on');
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(function () { el.classList.remove('on'); }, ms || 1100);
+  }
+  function ripple(x, y, s, n) {
+    for (var i = 0; i < (n || 1); i++) ripples.push({ x: x, y: y, r: 2 + i * 6, a: .9, s: s || 1 });
+  }
+  function splash(x, y, s, n) {
+    for (var i = 0; i < (n || 10); i++) {
+      drops.push({ x: x, y: y, vx: rnd(-60, 60) * s, vy: rnd(-170, -80) * s, life: rnd(.35, .6) });
+    }
+  }
+
+  function bobTarget(p) { return { x: 360 + p * 520, y: 482 - p * 232, s: 1 - .55 * p }; }
+  function tipPos() {
+    if (G.st === 'charge') return { x: lerp(TIP0.x, TIPB.x, G.power), y: lerp(TIP0.y, TIPB.y, G.power) };
+    if (G.st === 'fly') {
+      var u = Math.min(1, G.t / .22);
+      return { x: lerp(TIPB.x + (TIP0.x - TIPB.x) * (1 - G.p), TIP0.x + 15, u), y: lerp(TIPB.y, TIP0.y + 10, u) };
+    }
+    if (G.st === 'reel') {
+      return { x: TIP0.x - 10 + Math.sin(T * 30) * 2, y: TIP0.y + 34 + Math.sin(T * 23) * 2 };
+    }
+    if (G.st === 'bite') return { x: TIP0.x + Math.sin(T * 50) * 3, y: TIP0.y + 10 };
+    return TIP0;
+  }
+  function dangle() { var t = tipPos(); return { x: t.x + Math.sin(T * 2) * 3, y: t.y + 42, s: 1 }; }
+
+  // ── 조작 ─────────────────────────────────────
+  function press() {
+    if (G.st === 'idle') { G.st = 'charge'; G.power = 0; G.pdir = 1; return; }
+    if (G.st === 'wait') {
+      msg(G.nibble > 0 ? '너무 일렀어요' : '아직 입질이 없어요');
+      reelBack();
+      return;
+    }
+    if (G.st === 'bite') { hook(); return; }
+    if (G.st === 'reel') { G.hold = true; return; }
+    if (G.st === 'result') { closeCatch(); }
+  }
+  function release() {
+    if (G.st === 'charge') { cast(); return; }
+    if (G.st === 'reel') G.hold = false;
+  }
+
+  function cast() {
+    G.p = clamp(G.power, .02, 1);
+    G.from = dangle();
+    G.to = bobTarget(G.p);
+    G.st = 'fly'; G.t = 0;
+    beep(300, .12, 'triangle', .04);
+  }
+
+  function reelBack() {
+    G.st = 'back'; G.t = 0;
+    G.from = { x: G.bob.x, y: G.bob.y, s: G.bob.s };
+    G.hold = false; G.reel = null; G.catchObj = null;
+  }
+
+  function hook() {
+    var c = G.catchObj;
+    beep(880, .1, 'square', .04);
+    if (c.junk) { showCatch(c, 0); return; }
+    G.st = 'reel';
+    G.reel = {
+      f: .5, ft: .5, fturn: 0,
+      zs: zoneSize(),
+      zb: .3, zv: 0, prog: ZONE.start,
+      splashIn: .4,
+    };
+    G.hold = true;          // 챔질한 그 손으로 계속 누르고 있는 상태
+  }
+
+  // ── 진행 ─────────────────────────────────────
+  function update(dt) {
+    T += dt;
+    G.t += dt;
+
+    if (G.st === 'charge') {
+      G.power += G.pdir * dt * 1.1;
+      if (G.power >= 1) { G.power = 1; G.pdir = -1; }
+      if (G.power <= 0) { G.power = 0; G.pdir = 1; }
+    }
+
+    if (G.st === 'fly') {
+      var u = Math.min(1, G.t / .6);
+      G.bob.x = lerp(G.from.x, G.to.x, u);
+      G.bob.y = lerp(G.from.y, G.to.y, u) - Math.sin(u * Math.PI) * (120 + 120 * G.p);
+      G.bob.s = lerp(1, G.to.s, u);
+      if (u >= 1) {
+        G.st = 'wait'; G.t = 0;
+        G.wait = rnd(2, 7) * (1 - .15 * (S.bait - 1));
+        G.nibbleIn = rnd(.7, 2); G.nibble = 0;
+        ripple(G.bob.x, G.bob.y, G.bob.s, 2);
+        splash(G.bob.x, G.bob.y, G.bob.s, 8);
+        beep(520, .08, 'sine', .05);
+      }
+    }
+
+    if (G.st === 'wait') {
+      G.wait -= dt;
+      G.nibbleIn -= dt;
+      if (G.nibble > 0) G.nibble -= dt;
+      if (G.nibbleIn <= 0 && G.wait > .6) {
+        G.nibble = .35; G.nibbleIn = rnd(1, 2.4);
+        ripple(G.bob.x, G.bob.y, G.bob.s, 1);
+      }
+      if (G.wait <= 0) {
+        G.catchObj = pickCatch(G.p);
+        var r = G.catchObj.fish ? RAR[G.catchObj.fish.r] : RAR[0];
+        G.st = 'bite'; G.t = 0;
+        G.bite = .9 * r.bite;
+        ripple(G.bob.x, G.bob.y, G.bob.s, 3);
+        splash(G.bob.x, G.bob.y, G.bob.s, 6);
+        beep(700, .09, 'square', .05);
+      }
+    }
+
+    if (G.st === 'bite') {
+      G.bite -= dt;
+      if (G.bite <= 0) { msg('놓쳤어요…'); beep(220, .25, 'sine', .05); reelBack(); }
+    }
+
+    if (G.st === 'reel') updateReel(dt);
+
+    if (G.st === 'back') {
+      var v = Math.min(1, G.t / .35), d = dangle();
+      G.bob.x = lerp(G.from.x, d.x, v);
+      G.bob.y = lerp(G.from.y, d.y, v) - Math.sin(v * Math.PI) * 40;
+      G.bob.s = lerp(G.from.s, 1, v);
+      if (v >= 1) G.st = 'idle';
+    }
+
+    if (G.st === 'idle' || G.st === 'charge') {
+      var dd = dangle();
+      G.bob.x = dd.x; G.bob.y = dd.y; G.bob.s = 1;
+    }
+
+    for (var i = ripples.length - 1; i >= 0; i--) {
+      var q = ripples[i];
+      q.r += 26 * dt; q.a -= .9 * dt;
+      if (q.a <= 0) ripples.splice(i, 1);
+    }
+    for (var j = drops.length - 1; j >= 0; j--) {
+      var w = drops[j];
+      w.vy += 520 * dt; w.x += w.vx * dt; w.y += w.vy * dt; w.life -= dt;
+      if (w.life <= 0) drops.splice(j, 1);
+    }
+  }
+
+  function updateReel(dt) {
+    var R = G.reel, fish = G.catchObj.fish, rr = RAR[fish.r];
+
+    // 물고기: 목표 높이를 바꿔 가며 그쪽으로 헤엄친다
+    R.fturn -= dt;
+    if (R.fturn <= 0) { R.ft = Math.random(); R.fturn = rr.turn * (.5 + Math.random()); }
+    var d = R.ft - R.f, mv = rr.speed * dt;
+    R.f += Math.abs(d) < mv ? d : (d > 0 ? mv : -mv);
+    R.f = clamp(R.f + (Math.random() - .5) * rr.speed * .3 * dt, 0, 1);
+
+    // 초록 칸: 누르면 오르고 떼면 내려온다
+    var want = G.hold ? ZONE.up : -ZONE.down;
+    R.zv += (want - R.zv) * Math.min(1, ZONE.resp * dt);
+    R.zb += R.zv * dt;
+    if (R.zb < 0) { R.zb = 0; if (R.zv < 0) R.zv = 0; }
+    if (R.zb > 1 - R.zs) { R.zb = 1 - R.zs; if (R.zv > 0) R.zv = 0; }
+
+    var inside = inZone(R);
+    R.prog += inside ? rr.gain * dt : -rr.drain * dt;
+
+    // 찌가 조금씩 끌려온다
+    var tgt = bobTarget(G.p);
+    var pull = clamp(R.prog, 0, 1) * .55;
+    G.bob.x = lerp(tgt.x, 330, pull) + (R.f - .5) * 26;
+    G.bob.y = lerp(tgt.y, 470, pull);
+    G.bob.s = lerp(tgt.s, 1, pull);
+    R.splashIn -= dt;
+    if (R.splashIn <= 0) { splash(G.bob.x, G.bob.y, G.bob.s, 3); ripple(G.bob.x, G.bob.y, G.bob.s, 1); R.splashIn = rnd(.25, .6); }
+
+    if (R.prog >= 1) { caught(); return; }
+    if (R.prog <= 0) { msg('놓쳤어요…'); beep(220, .25, 'sine', .05); reelBack(); }
+  }
+
+  function caught() {
+    var f = G.catchObj.fish;
+    var size = f.min + (f.max - f.min) * Math.pow(Math.random(), 1.4);
+    size = Math.round(size * 10) / 10;
+    var avg = (f.min + f.max) / 2;
+    var gold = Math.max(1, Math.round(f.price * size / avg));
+    splash(G.bob.x, G.bob.y, G.bob.s, 16);
+    beep(660, .08, 'triangle', .05);
+    setTimeout(function () { beep(880, .08, 'triangle', .05); }, 90);
+    setTimeout(function () { beep(1100, .12, 'triangle', .05); }, 180);
+    showCatch(G.catchObj, gold, size);
+  }
+
+  function showCatch(c, gold, size) {
+    G.st = 'result'; G.hold = false;
+    var nm = $('cName'), rar = $('cRar'), info = $('cInfo'), nw = $('cNew');
+    var cc = $('catchCv'), jk = $('cJunk');
+    if (c.junk) {
+      gold = 1;
+      cc.hidden = true; jk.hidden = false; jk.textContent = c.junk.icon;
+      nm.textContent = c.junk.name;
+      rar.textContent = '쓰레기'; rar.style.background = '#7f8c8d';
+      info.textContent = '바다 청소 보상 +1 골드';
+      nw.textContent = '';
+    } else {
+      var f = c.fish, d = S.dex[f.id];
+      var first = !d, best = !d || size > d.best;
+      S.dex[f.id] = { count: (d ? d.count : 0) + 1, best: best ? size : d.best };
+      S.total++;
+      cc.hidden = false; jk.hidden = true;
+      var cg = cc.getContext('2d');
+      cg.clearRect(0, 0, cc.width, cc.height);
+      drawFish(cg, cc.width / 2, cc.height / 2 + 6, 300, f.color, f.shape, 1);
+      nm.textContent = f.name;
+      rar.textContent = RAR[f.r].name; rar.style.background = RAR[f.r].color;
+      info.textContent = size + 'cm · +' + gold + ' 골드';
+      nw.textContent = first ? '🎉 새로운 어종!' : best ? '🏆 최고 기록 갱신!' : '';
+    }
+    S.gold += gold;
+    save();
+    hud();
+    $('ovCatch').hidden = false;
+  }
+  function closeCatch() {
+    $('ovCatch').hidden = true;
+    G.st = 'back'; G.t = 0;
+    G.from = { x: G.bob.x, y: G.bob.y, s: G.bob.s };
+    G.reel = null; G.catchObj = null;
+  }
+  $('cOk').addEventListener('click', closeCatch);
+
+  // ── 그리기 ───────────────────────────────────
+  var view = { k: 1, ox: 0, oy: 0, dpr: 1 };
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+    var cw = gameEl.clientWidth || innerWidth, ch = gameEl.clientHeight || innerHeight;
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    var k = Math.min(cw / W, ch / H);
+    view = { k: k, ox: (cw - W * k) / 2, oy: (ch - H * k) / 2, dpr: dpr, cw: cw, ch: ch };
+  }
+  window.addEventListener('resize', resize);
+
+  function shade(hex, amt) {
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgb(' + clamp((n >> 16) + amt, 0, 255) + ',' + clamp((n >> 8 & 255) + amt, 0, 255) + ',' + clamp((n & 255) + amt, 0, 255) + ')';
+  }
+
+  function drawFish(c, x, y, L, col, shape, dir) {
+    var h = shape === 'flat' ? L * .42 : shape === 'long' ? L * .22 : L * .32;
+    c.save(); c.translate(x, y); c.scale(dir || 1, 1);
+    if (shape === 'long') {   // 돛
+      c.fillStyle = shade(col, 25);
+      c.beginPath(); c.moveTo(-L * .25, -h * .35); c.quadraticCurveTo(-L * .02, -h * 2.4, L * .24, -h * .4); c.closePath(); c.fill();
+    }
+    c.fillStyle = shade(col, -22);   // 꼬리
+    c.beginPath(); c.moveTo(-L * .38, 0); c.lineTo(-L * .62, -h * .55); c.lineTo(-L * .54, 0); c.lineTo(-L * .62, h * .55); c.closePath(); c.fill();
+    c.fillStyle = col;               // 몸통
+    c.beginPath(); c.ellipse(0, 0, L * .45, h / 2, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = 'rgba(255,255,255,.28)';
+    c.beginPath(); c.ellipse(L * .02, h * .15, L * .35, h * .19, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = shade(col, -16);   // 등지느러미
+    c.beginPath(); c.moveTo(-L * .14, -h * .44); c.quadraticCurveTo(L * .02, -h * .95, L * .16, -h * .42); c.closePath(); c.fill();
+    if (shape === 'long') {          // 주둥이
+      c.strokeStyle = shade(col, -30); c.lineWidth = Math.max(1.5, L * .02);
+      c.beginPath(); c.moveTo(L * .42, -h * .05); c.lineTo(L * .7, -h * .14); c.stroke();
+    }
+    var er = Math.max(1.5, L * .045);
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(L * .3, -h * .08, er, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#111'; c.beginPath(); c.arc(L * .31, -h * .08, er * .55, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+
+  function draw() {
+    var c = g, v = view;
+    c.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+    // 화면 비율이 달라 남는 곳도 하늘/바다 색으로 채운다
+    var hy = v.oy + HORIZON * v.k;
+    c.fillStyle = '#9fd3f1'; c.fillRect(0, 0, v.cw, hy);
+    c.fillStyle = '#0f4f7c'; c.fillRect(0, hy, v.cw, v.ch - hy);
+    c.setTransform(v.dpr * v.k, 0, 0, v.dpr * v.k, v.dpr * v.ox, v.dpr * v.oy);
+
+    // 하늘
+    var sky = c.createLinearGradient(0, 0, 0, HORIZON);
+    sky.addColorStop(0, '#6fbbea'); sky.addColorStop(1, '#cdebf8');
+    c.fillStyle = sky; c.fillRect(-200, 0, W + 400, HORIZON);
+    c.fillStyle = 'rgba(255,240,190,.55)'; c.beginPath(); c.arc(800, 82, 46, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#fff3c4'; c.beginPath(); c.arc(800, 82, 30, 0, Math.PI * 2); c.fill();
+    c.fillStyle = 'rgba(255,255,255,.85)';
+    for (var i = 0; i < 4; i++) {
+      var cx = ((i * 290 + T * (6 + i * 2)) % (W + 300)) - 150, cy = 50 + i * 30;
+      c.beginPath();
+      c.ellipse(cx, cy, 46, 14, 0, 0, Math.PI * 2);
+      c.ellipse(cx + 30, cy - 8, 30, 14, 0, 0, Math.PI * 2);
+      c.ellipse(cx - 28, cy - 4, 24, 11, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+    // 먼 섬
+    c.fillStyle = '#6f9fb8';
+    c.beginPath(); c.moveTo(520, HORIZON); c.quadraticCurveTo(600, HORIZON - 36, 690, HORIZON); c.fill();
+    c.fillStyle = '#82adc2';
+    c.beginPath(); c.moveTo(640, HORIZON); c.quadraticCurveTo(720, HORIZON - 22, 820, HORIZON); c.fill();
+
+    // 바다
+    var sea = c.createLinearGradient(0, HORIZON, 0, H);
+    sea.addColorStop(0, '#3a9ad0'); sea.addColorStop(1, '#0d4a78');
+    c.fillStyle = sea; c.fillRect(-200, HORIZON, W + 400, H - HORIZON);
+    c.strokeStyle = 'rgba(255,255,255,.16)'; c.lineWidth = 1.5;
+    for (var r = 0; r < 14; r++) {
+      var yy = HORIZON + 6 + Math.pow(r / 14, 1.6) * (H - HORIZON);
+      var amp = 1 + r * .35, len = 30 + r * 9, ph = T * (1 + r * .08) + r;
+      c.beginPath();
+      for (var x = -20 + ((r * 37) % 60); x < W + 20; x += len * 2.4) {
+        var y2 = yy + Math.sin(ph + x * .02) * amp;
+        c.moveTo(x, y2); c.quadraticCurveTo(x + len / 2, y2 - amp * 1.6, x + len, y2);
+      }
+      c.stroke();
+    }
+    // 햇빛 반짝임
+    c.fillStyle = 'rgba(255,250,220,.5)';
+    for (var s2 = 0; s2 < 10; s2++) {
+      var sx = 720 + Math.sin(s2 * 12.7) * 120, sy = HORIZON + 8 + s2 * 9;
+      if (Math.sin(T * 3 + s2 * 2.1) > .3) c.fillRect(sx, sy, 10 + s2 * 2, 2);
+    }
+
+    // 물결 고리
+    for (var q = 0; q < ripples.length; q++) {
+      var rp = ripples[q];
+      c.strokeStyle = 'rgba(255,255,255,' + Math.max(0, rp.a) + ')'; c.lineWidth = 1.5;
+      c.beginPath(); c.ellipse(rp.x, rp.y + 2, rp.r * rp.s, rp.r * .35 * rp.s, 0, 0, Math.PI * 2); c.stroke();
+    }
+
+    // 낚아 올리는 중이면 찌 아래 물고기 그림자
+    if (G.st === 'reel') {
+      c.fillStyle = 'rgba(5,30,50,.35)';
+      c.beginPath(); c.ellipse(G.bob.x + Math.sin(T * 4) * 10, G.bob.y + 14 * G.bob.s, 34 * G.bob.s, 9 * G.bob.s, 0, 0, Math.PI * 2); c.fill();
+    }
+
+    drawPier(c);
+    drawAngler(c);
+
+    // 낚싯줄 + 찌
+    var tip = tipPos(), b = G.bob;
+    c.strokeStyle = 'rgba(255,255,255,.75)'; c.lineWidth = Math.min(2.6, Math.max(1, 1 / view.k));
+    c.beginPath(); c.moveTo(tip.x, tip.y);
+    var slack = (G.st === 'wait' || G.st === 'bite') ? 40 : G.st === 'reel' ? 0 : 12;
+    c.quadraticCurveTo((tip.x + b.x) / 2, Math.max(tip.y, b.y) + slack, b.x, b.y - 6 * b.s);
+    c.stroke();
+
+    var dip = 0;
+    if (G.st === 'wait') dip = Math.sin(T * 3) * 1.5 + (G.nibble > 0 ? 4 : 0);
+    if (G.st === 'bite') dip = 9 + Math.sin(T * 40) * 2;
+    if (G.st === 'reel') dip = 4;
+    var br = 7 * b.s, bx = b.x, by = b.y + dip * b.s;
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(bx, by, br, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#e74c3c'; c.beginPath(); c.arc(bx, by, br, Math.PI, Math.PI * 2); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 1; c.beginPath(); c.arc(bx, by, br, 0, Math.PI * 2); c.stroke();
+
+    // 물방울
+    c.fillStyle = 'rgba(220,240,255,.9)';
+    for (var dI = 0; dI < drops.length; dI++) { var dp = drops[dI]; c.fillRect(dp.x - 1.5, dp.y - 1.5, 3, 3); }
+
+    // 입질 표시
+    if (G.st === 'bite') {
+      var bounce = Math.abs(Math.sin(T * 12)) * 6;
+      c.font = '900 ' + Math.max(46, 18 / view.k) + 'px "Segoe UI", sans-serif'; c.textAlign = 'center';
+      c.lineWidth = 6; c.strokeStyle = 'rgba(0,0,0,.55)';
+      c.strokeText('!', bx, by - 26 - bounce); c.fillStyle = '#ffd43b'; c.fillText('!', bx, by - 26 - bounce);
+    }
+
+    if (G.st === 'charge') drawPower(c);
+    if (G.st === 'reel') drawReel(c);
+  }
+
+  function drawPier(c) {
+    c.fillStyle = '#5b3a1e';
+    [-330, -240, -150, -60, 30, 120, 210].forEach(function (x) { c.fillRect(x, 452, 14, 160); });
+    c.fillStyle = 'rgba(0,0,0,.18)'; c.fillRect(-400, 458, 650, 8);
+    c.fillStyle = '#9a6a3a'; c.fillRect(-400, 436, 650, 20);
+    c.fillStyle = '#7d5430';
+    for (var x = -400; x < 250; x += 30) c.fillRect(x, 436, 2, 20);
+    c.fillStyle = 'rgba(255,255,255,.15)'; c.fillRect(-400, 436, 650, 3);
+  }
+
+  function drawAngler(c) {
+    var x = 196, y = 436;
+    var tip = tipPos();
+    c.strokeStyle = '#2e3b4e'; c.lineWidth = 7; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(x - 6, y); c.lineTo(x - 4, y - 36); c.moveTo(x + 7, y); c.lineTo(x + 4, y - 36); c.stroke();
+    c.fillStyle = '#e8553d';
+    c.beginPath(); c.moveTo(x - 15, y - 34); c.lineTo(x + 15, y - 34); c.lineTo(x + 12, y - 82); c.lineTo(x - 12, y - 82); c.closePath(); c.fill();
+    c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(x, y - 95, 13, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#3b5b3a';
+    c.beginPath(); c.ellipse(x, y - 104, 20, 5, 0, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.ellipse(x, y - 109, 12, 8, 0, Math.PI, Math.PI * 2); c.fill();
+    // 팔
+    c.strokeStyle = '#e8553d'; c.lineWidth = 6;
+    c.beginPath(); c.moveTo(x + 8, y - 74); c.lineTo(HAND.x, HAND.y - 4); c.stroke();
+    c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(HAND.x, HAND.y - 4, 4, 0, Math.PI * 2); c.fill();
+    // 낚싯대 — 감고 있을 때는 휜다
+    c.strokeStyle = '#3d2b1f'; c.lineWidth = 3;
+    c.beginPath(); c.moveTo(HAND.x - 14, HAND.y + 10);
+    if (G.st === 'reel') c.quadraticCurveTo(HAND.x + 40, tip.y - 40, tip.x, tip.y);
+    else c.lineTo(tip.x, tip.y);
+    c.stroke();
+    c.lineCap = 'butt';
+  }
+
+  function drawPower(c) {
+    var x = 60, y = 520, w = 230, h = 16;   // 부두 아래 빈 물 위
+    c.fillStyle = 'rgba(0,0,0,.5)'; c.fillRect(x - 3, y - 3, w + 6, h + 6);
+    var col = G.power < .4 ? '#7bd389' : G.power < .75 ? '#f6c344' : '#f0703c';
+    c.fillStyle = col; c.fillRect(x, y, w * G.power, h);
+    c.fillStyle = '#fff'; c.font = '700 ' + Math.max(13, 11 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif'; c.textAlign = 'center';
+    c.fillText(view.k < .6 ? '멀리 = 귀한 물고기' : '멀리 던질수록 귀한 물고기', x + w / 2, y - 9);
+  }
+
+  function drawReel(c) {
+    var R = G.reel, fish = G.catchObj.fish;
+    var x = 836, y = 126, w = 48, h = 350;
+    c.fillStyle = 'rgba(10,25,40,.72)';
+    roundRect(c, x - 10, y - 34, w + 56, h + 48, 12); c.fill();
+    c.fillStyle = '#1e5b85'; c.fillRect(x, y, w, h);
+    // 초록 칸
+    var zy = y + h - (R.zb + R.zs) * h, zh = R.zs * h;
+    var inside = inZone(R);
+    c.fillStyle = inside ? 'rgba(110,235,140,.75)' : 'rgba(110,235,140,.45)';
+    c.fillRect(x + 2, zy, w - 4, zh);
+    c.strokeStyle = '#c8ffd3'; c.lineWidth = 2; c.strokeRect(x + 2, zy, w - 4, zh);
+    // 물고기
+    drawFish(c, x + w / 2, y + h - R.f * h, 34, fish.color, fish.shape, Math.sin(T * 6) > 0 ? 1 : -1);
+    // 진행 막대
+    var px = x + w + 10;
+    c.fillStyle = '#0b2638'; c.fillRect(px, y, 12, h);
+    var pr = clamp(R.prog, 0, 1);
+    c.fillStyle = pr < .3 ? '#e74c3c' : pr < .7 ? '#f1c40f' : '#2ecc71';
+    c.fillRect(px, y + h - pr * h, 12, pr * h);
+    c.fillStyle = '#fff'; c.font = '700 ' + Math.max(12, 10 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif'; c.textAlign = 'center';
+    c.fillText(view.k < .6 ? '꾹!' : '꾹 눌러 올리기', x + w / 2 + 14, y - 14);
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  // ── 소리 (기본은 꺼짐 — 사무실이니까) ───────
+  var AC = null;
+  function beep(f, d, type, vol) {
+    if (!S.sound || mode !== 'game') return;
+    try {
+      AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+      var o = AC.createOscillator(), gn = AC.createGain();
+      o.type = type || 'sine'; o.frequency.value = f;
+      gn.gain.setValueAtTime(vol || .05, AC.currentTime);
+      gn.gain.exponentialRampToValueAtTime(.0001, AC.currentTime + d);
+      o.connect(gn); gn.connect(AC.destination);
+      o.start(); o.stop(AC.currentTime + d + .02);
+    } catch (e) {}
+  }
+
+  // ── 상단 표시 / 패널 ────────────────────────
+  var KEYNAME = { Escape: 'Esc', Backquote: '`', F2: 'F2' };
+  function hud() {
+    $('hGold').textContent = '💰 ' + S.gold.toLocaleString();
+    $('hCount').textContent = '🐟 ' + S.total + '마리';
+    $('bSound').textContent = S.sound ? '🔊' : '🔇';
+    $('bHide').title = '메모장으로 전환 (' + KEYNAME[S.boss] + ')';
+    $('help').innerHTML = '스페이스·클릭 꾹 → 던지기 &nbsp;·&nbsp; 입질(!) 때 누르기 &nbsp;·&nbsp; 감을 땐 꾹 눌러 초록 칸에 물고기 담기 &nbsp;|&nbsp; <b>' +
+      KEYNAME[S.boss] + '</b> 메모장';
+  }
+
+  function openPanel(id) {
+    overlays.forEach(function (o) { if (o.id !== 'ovCatch') o.hidden = true; });
+    if (G.st === 'charge') { G.st = 'idle'; }
+    G.hold = false;
+    if (id === 'ovDex') renderDex();
+    if (id === 'ovShop') renderShop();
+    if (id === 'ovSet') renderSet();
+    $(id).hidden = false;
+  }
+  document.querySelectorAll('[data-close]').forEach(function (b) {
+    b.addEventListener('click', function () { b.closest('.ov').hidden = true; });
+  });
+  overlays.forEach(function (o) {
+    o.addEventListener('mousedown', function (e) {
+      if (e.target === o && o.id !== 'ovCatch') o.hidden = true;   // 바깥 클릭으로 닫기
+    });
+  });
+  $('bDex').addEventListener('click', function () { openPanel('ovDex'); });
+  $('bShop').addEventListener('click', function () { openPanel('ovShop'); });
+  $('bSet').addEventListener('click', function () { openPanel('ovSet'); });
+  $('bSound').addEventListener('click', function () { S.sound = !S.sound; save(); hud(); if (S.sound) beep(660, .08); });
+  $('bHide').addEventListener('click', function () { toMemo(); });
+
+  function renderDex() {
+    var grid = $('dexGrid'); grid.innerHTML = '';
+    var got = 0;
+    FISH.forEach(function (f) {
+      var d = S.dex[f.id];
+      if (d) got++;
+      var it = document.createElement('div');
+      it.className = 'it' + (d ? '' : ' no');
+      var cc = document.createElement('canvas'); cc.width = 200; cc.height = 92;
+      drawFish(cc.getContext('2d'), 100, 50, 130, d ? f.color : '#c9ced4', f.shape, 1);
+      var n = document.createElement('div'); n.className = 'n';
+      n.textContent = d ? f.name : '???';
+      var m = document.createElement('div'); m.className = 'm';
+      var bd = document.createElement('span'); bd.className = 'badge';
+      bd.style.background = RAR[f.r].color; bd.textContent = RAR[f.r].name;
+      m.appendChild(bd);
+      if (d) m.appendChild(document.createTextNode(' ' + d.count + '마리 · 최고 ' + d.best + 'cm'));
+      it.appendChild(cc); it.appendChild(n); it.appendChild(m);
+      grid.appendChild(it);
+    });
+    $('dexSub').textContent = '발견 ' + got + ' / ' + FISH.length + '종 · 총 ' + S.total + '마리';
+  }
+
+  function renderShop() {
+    $('shopSub').textContent = '보유 골드 💰 ' + S.gold.toLocaleString();
+    var list = $('shopList'); list.innerHTML = '';
+    addItem(list, '🎣', '낚싯대', S.rod, ROD_MAX, ROD_COST,
+      '감을 때 초록 칸이 넓어진다 (현재 ' + Math.round(zoneSize() * 100) + '%)',
+      function () { S.rod++; });
+    addItem(list, '🪱', '미끼', S.bait, BAIT_MAX, BAIT_COST,
+      '입질이 빨라지고 귀한 물고기가 더 자주 문다',
+      function () { S.bait++; });
+  }
+  function addItem(list, icon, name, lv, max, cost, desc, apply) {
+    var row = document.createElement('div'); row.className = 'item';
+    var ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = icon;
+    var tx = document.createElement('div'); tx.className = 'tx';
+    var b = document.createElement('b'); b.textContent = name + ' Lv.' + lv + (lv >= max ? ' (최고)' : '');
+    var dd = document.createElement('div'); dd.textContent = desc;
+    tx.appendChild(b); tx.appendChild(dd);
+    var btn = document.createElement('button'); btn.className = 'btn';
+    if (lv >= max) { btn.textContent = '완료'; btn.disabled = true; }
+    else {
+      var price = cost[lv];
+      btn.textContent = '💰 ' + price.toLocaleString();
+      btn.disabled = S.gold < price;
+      btn.addEventListener('click', function () {
+        if (S.gold < price) return;
+        S.gold -= price; apply(); save(); hud(); renderShop();
+      });
+    }
+    row.appendChild(ic); row.appendChild(tx); row.appendChild(btn);
+    list.appendChild(row);
+  }
+
+  var resetArmed = false;
+  function renderSet() {
+    $('sBoss').value = S.boss;
+    $('sAuto').checked = !!S.autoHide;
+    $('sSound').checked = !!S.sound;
+    resetArmed = false; $('sReset').textContent = '초기화';
+  }
+  $('sBoss').addEventListener('change', function () { S.boss = this.value; save(); hud(); });
+  $('sAuto').addEventListener('change', function () { S.autoHide = this.checked; save(); });
+  $('sSound').addEventListener('change', function () { S.sound = this.checked; save(); hud(); });
+  $('sReset').addEventListener('click', function () {
+    // confirm() 창을 띄우면 창 포커스가 빠져 메모장으로 바뀌므로 두 번 누르게 한다
+    if (!resetArmed) { resetArmed = true; this.textContent = '한 번 더 누르면 삭제'; return; }
+    var keep = { memo: S.memo, memoClean: S.memoClean, boss: S.boss, autoHide: S.autoHide, sound: S.sound, win: S.win };
+    S = JSON.parse(JSON.stringify(DEF));
+    for (var k2 in keep) S[k2] = keep[k2];
+    save(); hud(); renderSet();
+    $('ovSet').hidden = true;
+    msg('기록을 초기화했어요');
+  });
+
+  // ── 메모장 ───────────────────────────────────
+  var mode = 'game';
+  function today() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  if (S.memo == null) {
+    S.memo = today() + ' 업무 메모\r\n\r\n[할 일]\r\n- 주간 보고 자료 취합\r\n- 회의록 정리 후 공유\r\n- 회신 대기 건 확인\r\n\r\n[메모]\r\n';
+    S.memoClean = true;
+  }
+  memoText.value = S.memo.replace(/\r\n/g, '\n');
+
+  function toMemo() {
+    if (mode === 'memo') return;
+    mode = 'memo';
+    G.hold = false;
+    if (G.st === 'charge') G.st = 'idle';
+    gameEl.hidden = true;
+    memoEl.hidden = false;
+    closeMenu();
+    memoText.focus();
+    syncStatus();
+  }
+  function toGame() {
+    if (mode === 'game') return;
+    mode = 'game';
+    memoText.blur();
+    closeMenu();
+    memoEl.hidden = true;
+    gameEl.hidden = false;
+    resize();
+    last = performance.now();
+  }
+
+  function syncStatus() {
+    var v = memoText.value, p = memoText.selectionStart || 0;
+    var before = v.slice(0, p), lines = before.split('\n');
+    $('npPos').textContent = '줄 ' + lines.length + ', 열 ' + (lines[lines.length - 1].length + 1);
+    $('npLen').textContent = v.length.toLocaleString() + '자';
+    $('npTab').classList.toggle('dirty', !S.memoClean);
+  }
+  var memoSaveT = null;
+  memoText.addEventListener('input', function () {
+    S.memoClean = false;
+    syncStatus();
+    clearTimeout(memoSaveT);
+    memoSaveT = setTimeout(function () { S.memo = memoText.value.replace(/\n/g, '\r\n'); save(); }, 300);
+  });
+  ['keyup', 'click', 'select'].forEach(function (ev) { memoText.addEventListener(ev, syncStatus); });
+
+  function insertAtCaret(text) {
+    var a = memoText.selectionStart, b = memoText.selectionEnd, v = memoText.value;
+    memoText.value = v.slice(0, a) + text + v.slice(b);
+    memoText.selectionStart = memoText.selectionEnd = a + text.length;
+    memoText.dispatchEvent(new Event('input'));
+  }
+  function stamp() {
+    var d = new Date(), h = d.getHours(), ap = h < 12 ? '오전' : '오후', h12 = h % 12 || 12;
+    return ap + ' ' + h12 + ':' + ('0' + d.getMinutes()).slice(-2) + ' ' + today();
+  }
+  function markSaved() { S.memoClean = true; S.memo = memoText.value.replace(/\n/g, '\r\n'); save(); syncStatus(); }
+
+  var MENUS = {
+    file: [['새 탭', 'Ctrl+N'], ['새 창', 'Ctrl+Shift+N'], ['열기', 'Ctrl+O'], ['최근 항목', ''], null,
+      ['저장', 'Ctrl+S', markSaved], ['다른 이름으로 저장', 'Ctrl+Shift+S'], ['모두 저장', 'Ctrl+Alt+S'], null,
+      ['페이지 설정', ''], ['인쇄', 'Ctrl+P'], null, ['탭 닫기', 'Ctrl+W'], ['창 닫기', 'Ctrl+Shift+W'], ['끝내기', '']],
+    edit: [['실행 취소', 'Ctrl+Z', function () { document.execCommand('undo'); }], null,
+      ['잘라내기', 'Ctrl+X'], ['복사', 'Ctrl+C'], ['붙여넣기', 'Ctrl+V'], ['삭제', 'Del'], null,
+      ['찾기', 'Ctrl+F'], ['다음 찾기', 'F3'], ['바꾸기', 'Ctrl+H'], ['이동', 'Ctrl+G'], null,
+      ['모두 선택', 'Ctrl+A', function () { memoText.select(); syncStatus(); }],
+      ['시간/날짜', 'F5', function () { insertAtCaret(stamp()); }], null, ['글꼴', '']],
+    view: [['확대/축소', '▸'], ['상태 표시줄', '✓'], ['자동 줄 바꿈', '✓']],
+  };
+  var dropEl = null, openBtn = null;
+  function closeMenu() {
+    if (dropEl) { dropEl.remove(); dropEl = null; }
+    if (openBtn) { openBtn.classList.remove('open'); openBtn = null; }
+  }
+  document.querySelectorAll('.np-menu .m').forEach(function (btn) {
+    btn.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var same = openBtn === btn;
+      closeMenu();
+      if (same) { memoText.focus(); return; }
+      openBtn = btn; btn.classList.add('open');
+      dropEl = document.createElement('div'); dropEl.className = 'np-drop';
+      dropEl.style.left = btn.offsetLeft + 'px';
+      MENUS[btn.dataset.menu].forEach(function (it) {
+        if (!it) { var s = document.createElement('div'); s.className = 'sep'; dropEl.appendChild(s); return; }
+        var d = document.createElement('div'); d.className = 'd';
+        var a = document.createElement('span'); a.textContent = it[0];
+        var k = document.createElement('span'); k.className = 'k'; k.textContent = it[1];
+        d.appendChild(a); d.appendChild(k);
+        d.addEventListener('mousedown', function (ev) {
+          ev.preventDefault();
+          closeMenu(); memoText.focus();
+          if (it[2]) it[2]();
+        });
+        dropEl.appendChild(d);
+      });
+      $('npMenu').appendChild(dropEl);
+    });
+  });
+  document.addEventListener('mousedown', function (e) {
+    if (dropEl && !e.target.closest('.np-menu')) closeMenu();
+  });
+
+  // ── 키보드 / 마우스 ─────────────────────────
+  window.addEventListener('keydown', function (e) {
+    if (e.code === S.boss) {
+      e.preventDefault();
+      if (mode === 'game') toMemo(); else toGame();
+      return;
+    }
+    if (mode === 'memo') {
+      if (e.ctrlKey && (e.code === 'KeyS')) { e.preventDefault(); markSaved(); }
+      else if (e.ctrlKey && e.code === 'KeyP') { e.preventDefault(); }
+      else if (e.code === 'F5') { e.preventDefault(); insertAtCaret(stamp()); }
+      else if (e.code === 'Escape') closeMenu();
+      return;
+    }
+    if (e.code === 'Space' || e.code === 'Enter') {
+      e.preventDefault();
+      if (e.repeat) return;
+      if (!$('ovCatch').hidden) { closeCatch(); return; }
+      if (panelOpen()) return;
+      press();
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    if (mode !== 'game') return;
+    if (e.code === 'Space' || e.code === 'Enter') release();
+  });
+  cv.addEventListener('mousedown', function (e) { if (e.button === 0 && !panelOpen()) press(); });
+  window.addEventListener('mouseup', function (e) { if (e.button === 0 && mode === 'game') release(); });
+  cv.addEventListener('touchstart', function (e) { e.preventDefault(); if (!panelOpen()) press(); }, { passive: false });
+  window.addEventListener('touchend', function () { if (mode === 'game') release(); });
+
+  // 다른 창으로 가면 메모장으로
+  window.addEventListener('blur', function () { if (S.autoHide && mode === 'game' && $('ovTab').hidden) toMemo(); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && S.autoHide && mode === 'game') toMemo();
+  });
+
+  // ── 루프 ─────────────────────────────────────
+  var last = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    var dt = Math.min(.05, (now - last) / 1000);
+    last = now;
+    if (mode !== 'game') return;            // 메모장일 땐 시간도 멈춘다
+    if (!panelOpen()) update(dt);
+    draw();
+  }
+
+  // ── 창 위치 ─────────────────────────────────
+  // 처음엔 화면 오른쪽 아래 구석에 붙인다. 사용자가 옮기거나 크기를 바꾸면 다음에도 그대로.
+  function placeWindow() {
+    if (TEST) return;
+    try {
+      var w = S.win;
+      var ok = w && w.x > -6000 && w.x < 12000 && w.y > -6000 && w.y < 12000;
+      // 화면 배율(125% 등) 때문에 저장·복원할 때마다 1~3px씩 어긋난다. 작은 차이는 무시해야 창이 점점 커지지 않는다.
+      if (ok && w.w >= 200 && w.h >= 150 &&
+          (Math.abs(w.w - window.outerWidth) > 6 || Math.abs(w.h - window.outerHeight) > 6)) window.resizeTo(w.w, w.h);
+      if (ok) window.moveTo(w.x, w.y);
+      else {
+        // 설치한 앱은 처음에 브라우저가 정한 큰 크기로 열린다 → 작게 줄인 뒤 구석으로
+        var app = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+        var ow = app ? 362 : window.outerWidth, oh = app ? 252 : window.outerHeight;
+        if (app) window.resizeTo(ow, oh);
+        window.moveTo((screen.availLeft || 0) + screen.availWidth - ow - 8,
+                      (screen.availTop || 0) + screen.availHeight - oh - 8);
+      }
+    } catch (e) { /* 창을 못 옮기는 환경이면 그냥 둔다 */ }
+    function remember() {
+      var cur = { x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight };
+      var moved = !S.win || Math.abs(S.win.x - cur.x) > 2 || Math.abs(S.win.y - cur.y) > 2;
+      var sized = !S.win || Math.abs(S.win.w - cur.w) > 6 || Math.abs(S.win.h - cur.h) > 6;
+      if (moved || sized) {
+        if (S.win && !sized) { cur.w = S.win.w; cur.h = S.win.h; }
+        S.win = cur; save();
+      }
+    }
+    window.addEventListener('beforeunload', remember);
+    setTimeout(function () { setInterval(remember, 3000); }, 1500);
+  }
+
+  placeWindow();
+
+  // ── 인터넷 주소로 배포했을 때 ───────────────
+  // 같은 파일을 PC 바로가기(file://)와 인터넷 주소(https://) 양쪽에서 쓴다.
+  var WEB = /^https?:$/.test(location.protocol);
+  if (WEB) {
+    var mf = document.createElement('link');
+    mf.rel = 'manifest'; mf.href = 'manifest.json';
+    document.head.appendChild(mf);
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  }
+
+  // 작은 창(앱)이 아니라 인터넷 창(탭)으로 열렸으면 알려 준다.
+  // 작은 창(--app, 설치한 앱)은 display-mode 가 standalone 으로 잡힌다.
+  $('tabMsg').innerHTML = WEB
+    ? '작은 창 전용 게임입니다.<br><b>앱으로 설치</b>를 누르거나, Edge 오른쪽 위 <b>…</b> → <b>앱</b> → <b>이 사이트를 앱으로 설치</b>'
+    : '작은 창 전용 게임입니다.<br>바탕화면 <b>메모</b> 아이콘 또는 게임 폴더의 <b>낚시 실행</b>으로 실행';
+  if (!TEST && window.matchMedia && !window.matchMedia('(display-mode: standalone)').matches) $('ovTab').hidden = false;
+  $('tabAnyway').addEventListener('click', function () { $('ovTab').hidden = true; });
+
+  // 브라우저가 설치를 허락하면 버튼 한 번으로 설치 대화상자를 띄운다
+  var installEvt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    installEvt = e;
+    $('tabInstall').hidden = false;
+  });
+  $('tabInstall').addEventListener('click', function () {
+    if (!installEvt) return;
+    installEvt.prompt();
+    installEvt.userChoice.then(function () { installEvt = null; $('tabInstall').hidden = true; });
+  });
+  window.addEventListener('appinstalled', function () {
+    $('tabMsg').innerHTML = '설치 완료.<br>이제 바탕화면 또는 시작 메뉴의 <b>메모</b> 아이콘으로 실행';
+    $('tabInstall').hidden = true;
+  });
+
+  resize();
+  hud();
+  requestAnimationFrame(frame);
+
+  if (TEST) {
+    window.__fish = {
+      G: G, S: S, RAR: RAR, ZONE: ZONE, press: press, release: release, toMemo: toMemo, toGame: toGame,
+      step: function (sec) { var n = Math.round(sec / .02); for (var i = 0; i < n; i++) if (mode === 'game' && !panelOpen()) update(.02); draw(); },
+      mode: function () { return mode; },
+    };
+  }
+})();
+</script>
+</body>
+</html>
