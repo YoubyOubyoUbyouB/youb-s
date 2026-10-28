@@ -92,6 +92,38 @@
   .set .hint { font-size: 12px; color: #888; margin-top: 2px; }
   .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
+  /* ── 함께 낚시 ─────────────────────────── */
+  #hNet.off { opacity: .7; }
+  #cupBar {
+    position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
+    background: rgba(0, 0, 0, .5); color: #fff; border-radius: 999px; padding: 4px 12px;
+    font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none;
+  }
+  #feed { position: absolute; left: 10px; bottom: 28px; display: flex; flex-direction: column; gap: 3px; pointer-events: none; }
+  #feed div {
+    background: rgba(0, 0, 0, .45); color: #fff; font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    width: max-content; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity .4s;
+  }
+  .room label { display: block; font-size: 12px; color: #666; margin: 10px 0 4px; }
+  .room input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid #ccd; border-radius: 8px; }
+  .room .note { font-size: 12px; color: #888; margin-top: 10px; line-height: 1.5; }
+  .room .err { color: #c0392b; font-size: 12px; min-height: 16px; margin-top: 6px; }
+  .room .code { font-size: 13px; color: #555; margin-bottom: 6px; }
+  .room .code b { color: #222; }
+  .who { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #eee; font-size: 13px; }
+  .who:first-child { border-top: none; }
+  .who i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .who .nm { font-weight: 700; }
+  .who .stt { color: #888; font-size: 12px; }
+  .who .sc { margin-left: auto; color: #555; font-size: 12px; white-space: nowrap; }
+  .foot .gap { flex: 1; }
+  .cuprow { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid #eee; font-size: 14px; }
+  .cuprow:first-child { border-top: none; }
+  .cuprow .rk { width: 26px; font-weight: 800; text-align: center; }
+  .cuprow i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .cuprow .pt { margin-left: auto; font-weight: 700; white-space: nowrap; }
+  .cuprow .bf { color: #888; font-size: 12px; }
+
   /* ── 작은 창 (구석에 띄워 두는 크기) ──────── */
   @media (max-width: 560px), (max-height: 380px) {
     #hud { top: 4px; left: 4px; right: 4px; gap: 4px; }
@@ -123,6 +155,19 @@
     .set .hint { font-size: 10px; }
     .set select { font-size: 11px; padding: 2px 4px; }
     .foot { margin-top: 8px; }
+
+    #cupBar { top: 30px; font-size: 10.5px; padding: 2px 8px; }
+    #feed { left: 4px; bottom: 4px; }
+    #feed div { font-size: 10px; padding: 2px 7px; }
+    .room label { font-size: 11px; margin: 6px 0 3px; }
+    .room input { font-size: 12px; padding: 5px 7px; }
+    .room .note { font-size: 10px; margin-top: 6px; }
+    .room .err { font-size: 11px; min-height: 13px; margin-top: 4px; }
+    .room .code { font-size: 11px; }
+    .who { padding: 4px 0; font-size: 11px; gap: 6px; }
+    .who .stt, .who .sc { font-size: 10px; }
+    .cuprow { padding: 4px 0; font-size: 12px; gap: 6px; }
+    .cuprow .bf { font-size: 10px; }
 
     .np-tabs { height: 28px; padding: 0 4px; }
     .np-tab { height: 24px; min-width: 110px; font-size: 11px; padding: 0 4px 0 9px; gap: 6px; border-radius: 6px 6px 0 0; }
@@ -187,7 +232,9 @@
   <div id="hud">
     <div class="pill" id="hGold">💰 0</div>
     <div class="pill" id="hCount">🐟 0마리</div>
+    <div class="pill" id="hNet" hidden></div>
     <div class="sp"></div>
+    <button id="bRoom" title="함께 낚시">👥</button>
     <button id="bDex" title="도감">📖</button>
     <button id="bShop" title="상점">🛒</button>
     <button id="bSound" title="소리">🔇</button>
@@ -195,6 +242,8 @@
     <button id="bHide" title="메모장으로 전환">📝</button>
   </div>
   <div id="msg"></div>
+  <div id="cupBar" hidden></div>
+  <div id="feed"></div>
   <div id="help"></div>
 
   <div class="ov" id="ovTab" hidden>
@@ -216,6 +265,42 @@
       <div class="cinfo" id="cInfo"></div>
       <div class="cnew" id="cNew"></div>
       <button class="btn" id="cOk">계속 (스페이스)</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovRoom" hidden>
+    <div class="card room">
+      <h2>함께 낚시</h2>
+      <div id="rmOut">
+        <div class="sub">같은 방 코드를 넣은 사람끼리 같은 바다에서 만남</div>
+        <label for="rmNick">별명</label>
+        <input id="rmNick" maxlength="10" autocomplete="off" placeholder="실명 대신 별명">
+        <label for="rmCode">방 코드</label>
+        <input id="rmCode" maxlength="20" autocomplete="off" placeholder="예: 우리팀">
+        <div class="err" id="rmErr"></div>
+        <div class="note">서버로 가는 정보: 별명 · 낚시 상태 · 잡은 물고기<br>메모장 내용은 보내지 않음</div>
+        <div class="foot"><button class="btn ghost" data-close>닫기</button><button class="btn" id="rmJoin">입장</button></div>
+      </div>
+      <div id="rmIn" hidden>
+        <div class="code">방 코드 <b id="rmCodeShow"></b> · <span id="rmConn"></span></div>
+        <div id="rmList"></div>
+        <div class="foot">
+          <button class="btn ghost" id="rmLeave">나가기</button>
+          <span class="gap"></span>
+          <button class="btn" id="rmCup3">3분 대회</button>
+          <button class="btn" id="rmCup5">5분 대회</button>
+          <button class="btn ghost" data-close>닫기</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovCup" hidden>
+    <div class="card">
+      <h2>🏆 대회 결과</h2>
+      <div class="sub" id="cupSub"></div>
+      <div id="cupList"></div>
+      <div class="foot"><button class="btn ghost" data-close>닫기</button></div>
     </div>
   </div>
 
@@ -299,7 +384,7 @@
   var KEY = 'fishmemo.v1';
   var DEF = {
     gold: 0, total: 0, dex: {}, rod: 1, bait: 1,
-    sound: false, autoHide: true, boss: 'Escape',
+    sound: false, autoHide: true, boss: 'Escape', nick: '', room: '',
     memo: null, memoClean: true,
   };
   var S = JSON.parse(JSON.stringify(DEF));
@@ -377,7 +462,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var gameEl = $('game'), memoEl = $('memo'), cv = $('cv'), g = cv.getContext('2d');
   var memoText = $('memoText');
-  var overlays = ['ovCatch', 'ovDex', 'ovShop', 'ovSet', 'ovTab'].map($);
+  var overlays = ['ovCatch', 'ovDex', 'ovShop', 'ovSet', 'ovTab', 'ovRoom', 'ovCup'].map($);
   function panelOpen() { return overlays.some(function (o) { return !o.hidden; }); }
 
   // ── 게임 상태 ───────────────────────────────
@@ -546,6 +631,7 @@
       w.vy += 520 * dt; w.x += w.vx * dt; w.y += w.vy * dt; w.life -= dt;
       if (w.life <= 0) drops.splice(j, 1);
     }
+    netSync();   // 던지기·입질·감기 상태가 바뀌었으면 방에 알린다
   }
 
   function updateReel(dt) {
@@ -610,6 +696,7 @@
       var first = !d, best = !d || size > d.best;
       S.dex[f.id] = { count: (d ? d.count : 0) + 1, best: best ? size : d.best };
       S.total++;
+      netSend({ t: 'catch', f: f.id, size: size });   // 함께 낚시 중이면 방에 알린다
       cc.hidden = false; jk.hidden = true;
       var cg = cc.getContext('2d');
       cg.clearRect(0, 0, cc.width, cc.height);
@@ -738,6 +825,7 @@
       c.beginPath(); c.ellipse(G.bob.x + Math.sin(T * 4) * 10, G.bob.y + 14 * G.bob.s, 34 * G.bob.s, 9 * G.bob.s, 0, 0, Math.PI * 2); c.fill();
     }
 
+    drawBoats(c);
     drawPier(c);
     drawAngler(c);
 
@@ -867,6 +955,7 @@
   // ── 상단 표시 / 패널 ────────────────────────
   var KEYNAME = { Escape: 'Esc', Backquote: '`', F2: 'F2' };
   function hud() {
+    netPill();
     $('hGold').textContent = '💰 ' + S.gold.toLocaleString();
     $('hCount').textContent = '🐟 ' + S.total + '마리';
     $('bSound').textContent = S.sound ? '🔊' : '🔇';
@@ -882,6 +971,7 @@
     if (id === 'ovDex') renderDex();
     if (id === 'ovShop') renderShop();
     if (id === 'ovSet') renderSet();
+    if (id === 'ovRoom') renderRoom();
     $(id).hidden = false;
   }
   document.querySelectorAll('[data-close]').forEach(function (b) {
@@ -966,7 +1056,7 @@
   $('sReset').addEventListener('click', function () {
     // confirm() 창을 띄우면 창 포커스가 빠져 메모장으로 바뀌므로 두 번 누르게 한다
     if (!resetArmed) { resetArmed = true; this.textContent = '한 번 더 누르면 삭제'; return; }
-    var keep = { memo: S.memo, memoClean: S.memoClean, boss: S.boss, autoHide: S.autoHide, sound: S.sound, win: S.win };
+    var keep = { memo: S.memo, memoClean: S.memoClean, boss: S.boss, autoHide: S.autoHide, sound: S.sound, win: S.win, nick: S.nick, room: S.room };
     S = JSON.parse(JSON.stringify(DEF));
     for (var k2 in keep) S[k2] = keep[k2];
     save(); hud(); renderSet();
@@ -996,6 +1086,7 @@
     closeMenu();
     memoText.focus();
     syncStatus();
+    netSync();
   }
   function toGame() {
     if (mode === 'game') return;
@@ -1006,6 +1097,7 @@
     gameEl.hidden = false;
     resize();
     last = performance.now();
+    netSync();
   }
 
   function syncStatus() {
@@ -1095,6 +1187,11 @@
       else if (e.code === 'Escape') closeMenu();
       return;
     }
+    var tg = e.target;
+    if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'SELECT')) {
+      if (e.code === 'Enter' && (tg.id === 'rmNick' || tg.id === 'rmCode')) { e.preventDefault(); roomJoin(); }
+      return;
+    }
     if (e.code === 'Space' || e.code === 'Enter') {
       e.preventDefault();
       if (e.repeat) return;
@@ -1118,12 +1215,306 @@
     if (document.hidden && S.autoHide && mode === 'game') toMemo();
   });
 
+  // ── 함께 낚시 ─────────────────────────────────
+  // 같은 방 코드끼리 그림판 서버(/fish)를 거쳐 만난다. 다른 사람은 바다 위 작은 배로 보인다.
+  // 서버로 보내는 것: 별명 · 방 코드 · 낚시 상태 · 자리 비움 여부 · 잡은 물고기(어종·크기).
+  // 메모장 내용은 보내지 않는다. 점수는 서버가 어종·크기로 다시 계산한다.
+  var FISH_BY_ID = {};
+  FISH.forEach(function (f) { FISH_BY_ID[f.id] = f; });
+  var NET = {
+    ws: null, want: false, on: false, you: null, code: '', players: {},
+    cup: null, cupAt: 0, retry: 0, timer: null, sentSt: '', sentAway: null,
+  };
+  // 다른 사람 배 자리 (논리 좌표 — 내 낚시꾼은 부두에 있다)
+  var BOATS = [
+    { x: 470, y: 300 }, { x: 640, y: 262 }, { x: 780, y: 300 }, { x: 560, y: 352 },
+    { x: 400, y: 254 }, { x: 720, y: 392 }, { x: 880, y: 258 }, { x: 600, y: 432 },
+  ];
+  var ST_TEXT = { idle: '쉬는 중', charge: '던지는 중', fly: '던지는 중', wait: '기다리는 중', bite: '입질!', reel: '감는 중' };
+
+  function fishServer() {
+    var q = location.search.match(/[?&]server=([^&]+)/);
+    if (q) return decodeURIComponent(q[1]);
+    if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return 'ws://' + location.hostname + ':3215/fish';
+    return 'wss://shared-paint.onrender.com/fish';
+  }
+  function netSend(o) {
+    if (NET.ws && NET.ws.readyState === 1) { try { NET.ws.send(JSON.stringify(o)); } catch (e) {} }
+  }
+
+  function netConnect() {
+    if (!S.room || !S.nick || NET.ws) return;
+    NET.want = true;
+    netPill();
+    // 무료 서버는 15분 쉬면 잠든다. 깨우는 요청을 먼저 보낸다 (응답은 안 읽는다)
+    try {
+      fetch(fishServer().replace(/^ws/, 'http').replace(/\/fish$/, '/fish/ping'), { mode: 'no-cors', cache: 'no-store' })
+        .catch(function () {});
+    } catch (e) {}
+    var ws;
+    try { ws = new WebSocket(fishServer()); } catch (e) { netRetry(); return; }
+    NET.ws = ws;
+    ws.onopen = function () {
+      NET.on = true; NET.retry = 0; NET.sentSt = ''; NET.sentAway = null;
+      netSend({ t: 'join', room: S.room, name: S.nick });
+      netSync();
+      netPill();
+    };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      netOnMsg(m);
+    };
+    ws.onclose = function () {
+      if (NET.ws !== ws) return;
+      NET.ws = null; NET.on = false; NET.you = null; NET.players = {};
+      netPill(); renderRoom(); cupBar();
+      if (NET.want) netRetry();
+    };
+  }
+  function netRetry() {
+    clearTimeout(NET.timer);
+    var d = Math.min(30000, 2000 * Math.pow(1.6, NET.retry++));
+    NET.timer = setTimeout(netConnect, d);
+    netPill();
+  }
+  function netDrop() {
+    NET.want = false;
+    clearTimeout(NET.timer);
+    var ws = NET.ws;
+    NET.ws = null; NET.on = false; NET.you = null; NET.players = {}; NET.cup = null; NET.code = '';
+    if (ws) { try { ws.close(); } catch (e) {} }
+  }
+  function netLeave() {
+    netSend({ t: 'leave' });
+    netDrop();
+    S.room = ''; save();
+    $('rmCode').value = '';
+    netPill(); renderRoom(); cupBar();
+  }
+  setInterval(function () { netSend({ t: 'ping' }); }, 25000);   // 연결 유지
+
+  // 내 상태(던지기·입질·감기·자리 비움)가 바뀔 때만 알린다
+  function netSync() {
+    if (!NET.on) return;
+    var st = G.st === 'back' || G.st === 'result' ? 'idle' : G.st;
+    var away = mode === 'memo';
+    if (st === NET.sentSt && away === NET.sentAway) return;
+    NET.sentSt = st; NET.sentAway = away;
+    netSend({ t: 'st', st: st, a: away });
+  }
+
+  function netOnMsg(m) {
+    if (m.t === 'room') {
+      NET.you = m.you; NET.code = m.code;
+      var next = {};
+      m.players.forEach(function (q) {
+        var old = NET.players[q.i];
+        next[q.i] = { i: q.i, n: q.n, c: q.c, s: q.s, st: q.st, a: q.a, h: q.h, b: q.b, show: old ? old.show : null };
+      });
+      NET.players = next;
+      netCup(m.cup, true);
+      $('rmErr').textContent = '';
+      netPill(); renderRoom();
+      return;
+    }
+    if (m.t === 'p') {
+      var pl = NET.players[m.i];
+      if (pl) { pl.st = m.st; pl.a = m.a; }
+      if (!$('ovRoom').hidden) renderRoom();
+      return;
+    }
+    if (m.t === 'got') {
+      var who = NET.players[m.i];
+      if (who) { who.h = m.h; who.b = m.b; who.show = { f: m.f, until: T + 3 }; }
+      if (m.cup) netCup(m.cup);
+      if (m.i !== NET.you) {
+        var f = FISH_BY_ID[m.f];
+        feedLine(m.n + ' · ' + (f ? f.name : '물고기') + ' ' + m.size + 'cm');
+      }
+      if (!$('ovRoom').hidden) renderRoom();
+      return;
+    }
+    if (m.t === 'cup') { netCup(m.cup); return; }
+    if (m.t === 'err') {
+      // 방이 가득 찼거나 코드가 잘못된 경우 — 다시 넣게 한다
+      netDrop();
+      S.room = ''; save();
+      openPanel('ovRoom');
+      $('rmErr').textContent = m.m;
+      netPill();
+    }
+  }
+
+  function netPill() {
+    if (!NET) return;
+    var el = $('hNet');
+    if (!S.room) { el.hidden = true; return; }
+    var live = NET.on && NET.you;
+    el.hidden = false;
+    el.textContent = live ? '👥 ' + Object.keys(NET.players).length : '👥 연결 중…';
+    el.classList.toggle('off', !live);
+  }
+
+  function feedLine(text) {
+    var box = $('feed'), d = document.createElement('div');
+    d.textContent = text;
+    box.appendChild(d);
+    while (box.children.length > 2) box.removeChild(box.firstChild);
+    setTimeout(function () {
+      d.style.opacity = '0';
+      setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 450);
+    }, 4000);
+  }
+
+  // ── 대회 ──
+  function netCup(c, quiet) {
+    var prev = NET.cup ? NET.cup.ph : null;
+    NET.cup = c; NET.cupAt = performance.now();
+    if (c && !quiet) {
+      if (c.ph === 'count' && prev !== 'count') msg('🏆 대회 곧 시작!', 1500);
+      if (c.ph === 'run' && prev !== 'run') msg('🏆 대회 시작! ' + c.mins + '분', 1500);
+      if (c.ph === 'done' && prev && prev !== 'done') showCupResult();
+    }
+    cupBar();
+  }
+  function cupLeft() { return NET.cup ? Math.max(0, NET.cup.left - (performance.now() - NET.cupAt)) : 0; }
+  function cupBar() {
+    var c = NET.cup, el = $('cupBar');
+    if (!c || c.ph === 'done' || !NET.on) { el.hidden = true; return; }
+    var sec = Math.ceil(cupLeft() / 1000);
+    if (c.ph === 'count') { el.textContent = '🏆 대회 ' + sec + '초 뒤 시작'; el.hidden = false; return; }
+    var mine = 0;
+    for (var i = 0; i < c.rows.length; i++) if (c.rows[i].i === NET.you) mine = i + 1;
+    var top = c.rows[0];
+    el.textContent = '🏆 ' + Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2) +
+      (top && top.pts ? ' · 1위 ' + top.n + ' ' + top.pts + '점' : '') + (mine ? ' · 나 ' + mine + '위' : '');
+    el.hidden = false;
+  }
+  setInterval(cupBar, 500);
+
+  function showCupResult() {
+    var c = NET.cup, list = $('cupList');
+    list.innerHTML = '';
+    var medal = ['🥇', '🥈', '🥉'];
+    c.rows.forEach(function (r, i) {
+      var row = document.createElement('div'); row.className = 'cuprow';
+      var rk = document.createElement('span'); rk.className = 'rk';
+      rk.textContent = r.pts && i < 3 ? medal[i] : String(i + 1);
+      var dot = document.createElement('i'); dot.style.background = r.c;
+      var nm = document.createElement('span'); nm.textContent = r.n + (r.i === NET.you ? ' (나)' : '');
+      var bf = document.createElement('span'); bf.className = 'bf';
+      if (r.best) { var f = FISH_BY_ID[r.best.f]; bf.textContent = (f ? f.name : '') + ' ' + r.best.size + 'cm'; }
+      var pt = document.createElement('span'); pt.className = 'pt'; pt.textContent = r.pts + '점 · ' + r.cnt + '마리';
+      row.appendChild(rk); row.appendChild(dot); row.appendChild(nm); row.appendChild(bf); row.appendChild(pt);
+      list.appendChild(row);
+    });
+    $('cupSub').textContent = c.mins + '분 대회';
+    openPanel('ovCup');
+  }
+
+  // ── 방 창 ──
+  function renderRoom() {
+    var inRoom = !!S.room;
+    $('rmOut').hidden = inRoom;
+    $('rmIn').hidden = !inRoom;
+    if (!inRoom) { if (!$('rmNick').value) $('rmNick').value = S.nick || ''; return; }
+    var live = NET.on && NET.you;
+    $('rmCodeShow').textContent = S.room;
+    $('rmConn').textContent = live ? Object.keys(NET.players).length + '명 접속' : '서버 연결 중… (처음엔 1분쯤 걸릴 수 있음)';
+    var list = $('rmList'); list.innerHTML = '';
+    Object.keys(NET.players).map(function (k) { return NET.players[k]; })
+      .sort(function (a, b) { return b.h - a.h; })
+      .forEach(function (q) {
+        var row = document.createElement('div'); row.className = 'who';
+        var dot = document.createElement('i'); dot.style.background = q.c;
+        var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = q.n + (q.i === NET.you ? ' (나)' : '');
+        var st = document.createElement('span'); st.className = 'stt'; st.textContent = q.a ? '자리 비움' : (ST_TEXT[q.st] || '');
+        var sc = document.createElement('span'); sc.className = 'sc';
+        var bf = q.b && FISH_BY_ID[q.b.f];
+        sc.textContent = q.h + '점' + (bf ? ' · ' + bf.name + ' ' + q.b.size + 'cm' : '');
+        row.appendChild(dot); row.appendChild(nm); row.appendChild(st); row.appendChild(sc);
+        list.appendChild(row);
+      });
+    var running = NET.cup && (NET.cup.ph === 'count' || NET.cup.ph === 'run');
+    $('rmCup3').disabled = $('rmCup5').disabled = !live || !!running;
+  }
+  function roomJoin() {
+    var nick = $('rmNick').value.replace(/\s+/g, ' ').trim().slice(0, 10);
+    var code = $('rmCode').value.toLowerCase().replace(/[^0-9a-z가-힣_-]/g, '').slice(0, 20);
+    if (!nick) { $('rmErr').textContent = '별명을 넣어 주세요'; return; }
+    if (!code) { $('rmErr').textContent = '방 코드를 넣어 주세요 (한글·영문·숫자)'; return; }
+    S.nick = nick; S.room = code; save();
+    $('rmErr').textContent = '';
+    netConnect();
+    renderRoom(); netPill();
+  }
+  $('bRoom').addEventListener('click', function () { openPanel('ovRoom'); });
+  $('rmJoin').addEventListener('click', roomJoin);
+  $('rmLeave').addEventListener('click', netLeave);
+  $('rmCup3').addEventListener('click', function () { netSend({ t: 'cup', mins: 3 }); $('ovRoom').hidden = true; });
+  $('rmCup5').addEventListener('click', function () { netSend({ t: 'cup', mins: 5 }); $('ovRoom').hidden = true; });
+
+  // ── 다른 사람 배 ──
+  function drawBoats(c) {
+    if (!NET.on || !NET.you) return;
+    for (var k in NET.players) {
+      var q = NET.players[k];
+      if (q.i === NET.you) continue;
+      var B = BOATS[q.s % BOATS.length];
+      var s = .75 + (B.y - HORIZON) / (H - HORIZON) * .75;   // 작은 창에서도 보이게 넉넉히
+      var x = B.x, y = B.y + Math.sin(T * 1.6 + q.s) * 2 * s;
+      c.save();
+      if (q.a) c.globalAlpha = .45;                    // 자리 비움(메모장 보는 중)
+      c.fillStyle = '#7a4a26';
+      c.beginPath();
+      c.moveTo(x - 36 * s, y - 6 * s); c.lineTo(x + 36 * s, y - 6 * s);
+      c.lineTo(x + 26 * s, y + 8 * s); c.lineTo(x - 26 * s, y + 8 * s);
+      c.closePath(); c.fill();
+      c.fillStyle = '#a0683a'; c.fillRect(x - 36 * s, y - 8 * s, 72 * s, 3 * s);
+      c.fillStyle = q.c; c.fillRect(x - 6 * s, y - 26 * s, 12 * s, 20 * s);
+      c.fillStyle = '#f2c9a0'; c.beginPath(); c.arc(x, y - 32 * s, 6 * s, 0, Math.PI * 2); c.fill();
+
+      var reel = q.st === 'reel';
+      var tipX = x + (reel ? 34 : 30) * s, tipY = y - (reel ? 34 : 48) * s;
+      c.strokeStyle = '#3d2b1f'; c.lineWidth = Math.max(1, 2 * s);
+      c.beginPath(); c.moveTo(x + 4 * s, y - 18 * s); c.lineTo(tipX, tipY); c.stroke();
+      if (q.st === 'wait' || q.st === 'bite' || reel) {
+        var bx = x + 62 * s, by = y + 4 * s;
+        by += q.st === 'bite' ? 4 * s : reel ? 2 * s + Math.sin(T * 30) * 1.5 * s : Math.sin(T * 3 + q.s) * s;
+        c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = Math.min(2, Math.max(.8, .7 / view.k));
+        c.beginPath(); c.moveTo(tipX, tipY); c.lineTo(bx, by); c.stroke();
+        c.fillStyle = '#e74c3c'; c.beginPath(); c.arc(bx, by, 3.5 * s, 0, Math.PI * 2); c.fill();
+        if (q.st === 'bite') {
+          c.fillStyle = '#ffd43b'; c.textAlign = 'center';
+          c.font = '900 ' + Math.max(18, 10 / view.k) + 'px "Segoe UI", sans-serif';
+          c.fillText('!', bx, by - 10 * s);
+        }
+        if (reel && Math.random() < .05) ripple(bx, by, s, 1);
+      }
+
+      var showing = q.show && T < q.show.until;
+      if (showing) {
+        var f = FISH_BY_ID[q.show.f];
+        if (f) drawFish(c, x, y - 58 * s + Math.sin(T * 6) * 2, 60 * s, f.color, f.shape, 1);
+      }
+      var label = q.a ? q.n + ' 💤' : q.n;
+      var ly = y - 44 * s - (showing ? 30 * s : 0);
+      c.font = '700 ' + Math.max(11, 9 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif';
+      c.textAlign = 'center';
+      c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.55)'; c.strokeText(label, x, ly);
+      c.fillStyle = '#fff'; c.fillText(label, x, ly);
+      c.restore();
+    }
+  }
+
   // ── 루프 ─────────────────────────────────────
   var last = performance.now();
   function frame(now) {
     requestAnimationFrame(frame);
     var dt = Math.min(.05, (now - last) / 1000);
     last = now;
+    netSync();
     if (mode !== 'game') return;            // 메모장일 땐 시간도 멈춘다
     if (!panelOpen()) update(dt);
     draw();
@@ -1203,11 +1594,15 @@
   hud();
   requestAnimationFrame(frame);
 
+  // 전에 들어가 있던 방이 있으면 다시 들어간다
+  if (S.room && S.nick && (!TEST || /[?&]server=/.test(location.search))) netConnect();
+
   if (TEST) {
     window.__fish = {
       G: G, S: S, RAR: RAR, ZONE: ZONE, press: press, release: release, toMemo: toMemo, toGame: toGame,
       step: function (sec) { var n = Math.round(sec / .02); for (var i = 0; i < n; i++) if (mode === 'game' && !panelOpen()) update(.02); draw(); },
       mode: function () { return mode; },
+      NET: NET, netConnect: netConnect,
     };
   }
 })();

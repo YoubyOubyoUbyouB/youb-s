@@ -161,6 +161,12 @@ const isSecure = (req) => req.headers['x-forwarded-proto'] === 'https';
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
 
+  // 메모(낚시) 앱이 접속 전에 잠든 서버를 깨우려고 부르는 주소. 아무 정보도 돌려주지 않는다.
+  if (urlPath === '/fish/ping') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }).end();
+    return;
+  }
+
   // 암호 확인
   if (req.method === 'POST' && urlPath === '/login') {
     const ip = clientIp(req);
@@ -1633,7 +1639,12 @@ function cleanName(v) {
   return String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
 }
 
+// 메모(낚시) 함께 하기 — 그림판과 상태를 전혀 공유하지 않는 별도 방 (fish-room.js)
+const fish = require('./fish-room')({ encodeFrame, feed, GUID });
+
 server.on('upgrade', (req, socket) => {
+  if ((req.url || '').split('?')[0] === '/fish') return fish.upgrade(req, socket);
+
   const key = req.headers['sec-websocket-key'];
   if (!key) return socket.destroy();
 
