@@ -27,7 +27,7 @@
   #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
   #hud { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 8px; align-items: center; pointer-events: none; }
   #hud > * { pointer-events: auto; }
-  .pill { background: rgba(0, 0, 0, .42); color: #fff; border-radius: 999px; padding: 6px 13px; font-size: 14px; font-weight: 600; }
+  .pill { white-space: nowrap; background: rgba(0, 0, 0, .42); color: #fff; border-radius: 999px; padding: 6px 13px; font-size: 14px; font-weight: 600; }
   #hud .sp { flex: 1; pointer-events: none; }
   #hud button {
     width: 36px; height: 36px; border-radius: 10px; border: none; cursor: pointer;
@@ -99,6 +99,14 @@
     background: rgba(0, 0, 0, .5); color: #fff; border-radius: 999px; padding: 4px 12px;
     font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none;
   }
+  #monBar {
+    position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
+    background: rgba(120, 20, 20, .78); color: #fff; border-radius: 999px; padding: 4px 12px;
+    font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none;
+  }
+  #monBar.join { pointer-events: auto; cursor: pointer; animation: monPulse 1s infinite; }
+  @keyframes monPulse { 50% { background: rgba(190, 40, 40, .9); } }
+  .room .foot { flex-wrap: wrap; row-gap: 6px; }
   #feed { position: absolute; left: 10px; bottom: 28px; display: flex; flex-direction: column; gap: 3px; pointer-events: none; }
   #feed div {
     background: rgba(0, 0, 0, .45); color: #fff; font-size: 12px; padding: 3px 9px; border-radius: 999px;
@@ -128,6 +136,7 @@
   @media (max-width: 560px), (max-height: 380px) {
     #hud { top: 4px; left: 4px; right: 4px; gap: 4px; }
     .pill { font-size: 10.5px; padding: 2px 7px; }
+    #hCount { display: none; }   /* 좁은 창에선 마리 수는 도감에서 */
     #hud button { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; padding: 0; }
     #help { display: none; }
     #msg { font-size: 15px; top: 16%; }
@@ -156,7 +165,7 @@
     .set select { font-size: 11px; padding: 2px 4px; }
     .foot { margin-top: 8px; }
 
-    #cupBar { top: 30px; font-size: 10.5px; padding: 2px 8px; }
+    #cupBar, #monBar { top: 30px; font-size: 10.5px; padding: 2px 8px; }
     #feed { left: 4px; bottom: 4px; }
     #feed div { font-size: 10px; padding: 2px 7px; }
     .room label { font-size: 11px; margin: 6px 0 3px; }
@@ -243,6 +252,7 @@
   </div>
   <div id="msg"></div>
   <div id="cupBar" hidden></div>
+  <div id="monBar" hidden></div>
   <div id="feed"></div>
   <div id="help"></div>
 
@@ -289,6 +299,7 @@
           <span class="gap"></span>
           <button class="btn" id="rmCup3">3분 대회</button>
           <button class="btn" id="rmCup5">5분 대회</button>
+          <button class="btn warn" id="rmMon">🦈 괴물 부르기</button>
           <button class="btn ghost" data-close>닫기</button>
         </div>
       </div>
@@ -325,7 +336,7 @@
   <div class="ov" id="ovSet" hidden>
     <div class="card set">
       <h2>설정</h2>
-      <div class="sub">메모장 전환 방식</div>
+      <div class="sub">메모장 전환 · 낚시 조작</div>
       <div class="line">
         <div>전환 키<div class="hint">게임 ↔ 메모장을 오가는 키</div></div>
         <select id="sBoss">
@@ -337,6 +348,15 @@
       <div class="line">
         <div>다른 창으로 가면 메모장으로<div class="hint">Alt+Tab 이나 다른 창 클릭 시 자동 전환</div></div>
         <input type="checkbox" id="sAuto">
+      </div>
+      <div class="line">
+        <div>줄 장력<div class="hint">물고기가 빨갛게 몸부림칠 때 계속 감으면 줄이 끊어짐</div></div>
+        <select id="sTension">
+          <option value="0">끔</option>
+          <option value="1">약하게</option>
+          <option value="2">보통</option>
+          <option value="3">강하게</option>
+        </select>
       </div>
       <div class="line">
         <div>소리</div>
@@ -385,6 +405,7 @@
   var DEF = {
     gold: 0, total: 0, dex: {}, rod: 1, bait: 1,
     sound: false, autoHide: true, boss: 'Escape', nick: '', room: '',
+    tension: 2, line: 1,
     memo: null, memoClean: true,
   };
   var S = JSON.parse(JSON.stringify(DEF));
@@ -393,15 +414,17 @@
     if (raw) { var o = JSON.parse(raw); for (var k in o) S[k] = o[k]; }
   } catch (e) { /* 저장소를 못 쓰면 이번 실행만 기억 */ }
   if (TEST) S.autoHide = false;
+  if (S.tension == null) S.tension = 2;   // 예전 저장본에는 없는 값
+  if (!S.line) S.line = 1;
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
   // ── 물고기 ───────────────────────────────────
   var RAR = [
-    { name: '흔함', color: '#8b95a1', speed: .25, turn: 1.4, drain: .13, gain: .34, bite: 1.0 },
-    { name: '보통', color: '#3fa45b', speed: .35, turn: 1.2, drain: .16, gain: .30, bite: .95 },
-    { name: '희귀', color: '#2f7fe0', speed: .46, turn: 1.0, drain: .19, gain: .26, bite: .9 },
-    { name: '영웅', color: '#9b4ee0', speed: .58, turn: .85, drain: .22, gain: .22, bite: .8 },
-    { name: '전설', color: '#e0a21a', speed: .72, turn: .7, drain: .25, gain: .18, bite: .7 },
+    { name: '흔함', color: '#8b95a1', speed: .25, turn: 1.4, drain: .13, gain: .34, bite: 1.0, rise: 1.6, every: 4.0 },
+    { name: '보통', color: '#3fa45b', speed: .35, turn: 1.2, drain: .16, gain: .30, bite: .95, rise: 1.8, every: 3.2 },
+    { name: '희귀', color: '#2f7fe0', speed: .46, turn: 1.0, drain: .19, gain: .26, bite: .9, rise: 2.0, every: 2.6 },
+    { name: '영웅', color: '#9b4ee0', speed: .58, turn: .85, drain: .22, gain: .22, bite: .8, rise: 2.2, every: 2.2 },
+    { name: '전설', color: '#e0a21a', speed: .72, turn: .7, drain: .25, gain: .18, bite: .7, rise: 2.4, every: 1.8 },
   ];
   // 초록 칸 움직임 — 누르면 위로, 떼면 아래로
   // 초록 칸 — 누르면 일정한 속도로 오르고, 떼면 일정한 속도로 내려온다 (관성 없음)
@@ -439,6 +462,21 @@
   var ROD_COST = [0, 150, 400, 900, 2000];   // 다음 단계 가격 (index = 현재 단계)
   var BAIT_COST = [0, 120, 350, 800];
   var ROD_MAX = 5, BAIT_MAX = 4;
+  var LINE_COST = [0, 100, 300, 700];
+  var LINE_MAX = 4;
+
+  // 줄 장력 설정 — 0 끔 · 1 약하게 · 2 보통 · 3 강하게
+  //   rate : 장력 오르는 속도 배율   every: 몸부림 간격 배율 (클수록 드물게)
+  var TENSION = [null, { rate: .6, every: 1.5 }, { rate: 1, every: 1 }, { rate: 1.35, every: .8 }];
+  var THRASH_MIN = 1, THRASH_MAX = 1.6;   // 몸부림 한 번의 길이 (초)
+  function lineK() { return 1 - .15 * (S.line - 1); }   // 낚싯줄 단계마다 장력이 15%씩 덜 찬다
+
+  // 괴물 물고기 — 서버(fish-room.js)의 MON_KINDS 와 id 가 같아야 한다
+  var MON = {
+    king: { name: '대왕 참다랑어', color: '#1b3a5c', speed: .6, turn: .7, rise: 2.0, every: 3.0 },
+    angler: { name: '심해 아귀왕', color: '#4a3b34', shape: 'flat', speed: .68, turn: .6, rise: 2.2, every: 2.6 },
+    sail: { name: '폭풍 돛새치', color: '#2c5aa0', shape: 'long', speed: .76, turn: .5, rise: 2.4, every: 2.3 },
+  };
 
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -474,7 +512,7 @@
     from: null, to: null, p: 0,
     bob: { x: TIP0.x, y: TIP0.y + 40, s: 1 },
     wait: 0, nibbleIn: 0, nibble: 0, bite: 0,
-    catchObj: null, reel: null, hold: false,
+    catchObj: null, reel: null, hold: false, mon: null,
   };
   var T = 0;                         // 배경 연출용 시계
   var ripples = [], drops = [];
@@ -503,7 +541,7 @@
       var u = Math.min(1, G.t / .22);
       return { x: lerp(TIPB.x + (TIP0.x - TIPB.x) * (1 - G.p), TIP0.x + 15, u), y: lerp(TIPB.y, TIP0.y + 10, u) };
     }
-    if (G.st === 'reel') {
+    if (G.st === 'reel' || G.st === 'mon') {
       return { x: TIP0.x - 10 + Math.sin(T * 30) * 2, y: TIP0.y + 34 + Math.sin(T * 23) * 2 };
     }
     if (G.st === 'bite') return { x: TIP0.x + Math.sin(T * 50) * 3, y: TIP0.y + 10 };
@@ -513,6 +551,8 @@
 
   // ── 조작 ─────────────────────────────────────
   function press() {
+    if (monCanJoin()) { monJoin(); return; }             // 괴물이 나와 있으면 누르는 것으로 합류
+    if (G.st === 'mon') { G.hold = true; return; }
     if (G.st === 'idle') { G.st = 'charge'; G.power = 0; G.pdir = 1; return; }
     if (G.st === 'wait') {
       msg(G.nibble > 0 ? '너무 일렀어요' : '아직 입질이 없어요');
@@ -525,7 +565,7 @@
   }
   function release() {
     if (G.st === 'charge') { cast(); return; }
-    if (G.st === 'reel') G.hold = false;
+    if (G.st === 'reel' || G.st === 'mon') G.hold = false;
   }
 
   function cast() {
@@ -547,11 +587,13 @@
     beep(880, .1, 'square', .04);
     if (c.junk) { showCatch(c, 0); return; }
     G.st = 'reel';
+    var rr = RAR[c.fish.r], TS = TENSION[S.tension];
     G.reel = {
       f: .5, ft: .5, fturn: 0,
       zs: zoneSize(),
       zb: .3, zv: 0, prog: ZONE.start,
       splashIn: .4,
+      ten: 0, thrash: 0, thrashIn: TS ? rr.every * TS.every * rnd(.4, 1) : 99,
     };
     G.hold = true;          // 챔질한 그 손으로 계속 누르고 있는 상태
   }
@@ -607,6 +649,7 @@
     }
 
     if (G.st === 'reel') updateReel(dt);
+    if (G.st === 'mon') updateMon(dt);
 
     if (G.st === 'back') {
       var v = Math.min(1, G.t / .35), d = dangle();
@@ -634,15 +677,21 @@
     netSync();   // 던지기·입질·감기 상태가 바뀌었으면 방에 알린다
   }
 
-  function updateReel(dt) {
-    var R = G.reel, fish = G.catchObj.fish, rr = RAR[fish.r];
+  /**
+   * 감기 공통 — 물고기 움직임 · 초록 칸 · 줄 장력. 일반 낚시와 괴물 싸움이 같이 쓴다.
+   * spec: speed, turn (움직임) / rise, every (몸부림). 줄이 끊어지면 true.
+   */
+  function stepFight(R, spec, dt, allowThrash) {
+    var TS = allowThrash ? TENSION[S.tension] : null;
+    var thr = TS && R.thrash > 0;
+    var sp = spec.speed * (thr ? 1.7 : 1);      // 몸부림칠 때는 더 빠르게 날뛴다
 
     // 물고기: 목표 높이를 바꿔 가며 그쪽으로 헤엄친다
     R.fturn -= dt;
-    if (R.fturn <= 0) { R.ft = Math.random(); R.fturn = rr.turn * (.5 + Math.random()); }
-    var d = R.ft - R.f, mv = rr.speed * dt;
+    if (R.fturn <= 0) { R.ft = Math.random(); R.fturn = spec.turn * (.5 + Math.random()); }
+    var d = R.ft - R.f, mv = sp * dt;
     R.f += Math.abs(d) < mv ? d : (d > 0 ? mv : -mv);
-    R.f = clamp(R.f + (Math.random() - .5) * rr.speed * .3 * dt, 0, 1);
+    R.f = clamp(R.f + (Math.random() - .5) * sp * .3 * dt, 0, 1);
 
     // 초록 칸: 누르면 오르고 떼면 내려온다
     var want = G.hold ? ZONE.up : -ZONE.down;
@@ -651,8 +700,39 @@
     if (R.zb < 0) { R.zb = 0; if (R.zv < 0) R.zv = 0; }
     if (R.zb > 1 - R.zs) { R.zb = 1 - R.zs; if (R.zv > 0) R.zv = 0; }
 
+    // 줄 장력: 몸부림치는 동안 계속 누르고 있으면 차오르고, 손을 떼면 빠진다
+    if (TS) {
+      if (R.thrash > 0) {
+        R.thrash -= dt;
+        R.ten += G.hold ? spec.rise * TS.rate * lineK() * dt : -1.2 * dt;
+      } else {
+        R.ten -= .5 * dt;
+        R.thrashIn -= dt;
+        if (R.thrashIn <= 0) { R.thrash = THRASH_MIN + Math.random() * (THRASH_MAX - THRASH_MIN); R.thrashIn = spec.every * TS.every * rnd(.6, 1.4); }
+      }
+      R.ten = clamp(R.ten, 0, 1);
+    } else {
+      R.thrash = 0;
+      R.ten = Math.max(0, (R.ten || 0) - dt);
+    }
+    return R.ten >= 1;
+  }
+
+  function snapLine() {
+    msg('줄이 끊어졌어요!', 1400);
+    beep(160, .3, 'sawtooth', .05);
+    splash(G.bob.x, G.bob.y, G.bob.s, 10);
+    reelBack();
+  }
+
+  function updateReel(dt) {
+    var R = G.reel, fish = G.catchObj.fish, rr = RAR[fish.r];
+    if (stepFight(R, rr, dt, true)) { snapLine(); return; }
+
     var inside = inZone(R);
-    R.prog += inside ? rr.gain * dt : -rr.drain * dt;
+    // 몸부림칠 때 손을 떼고 버티는 건 올바른 대처 — 그동안은 진행도가 깎이지 않는다
+    var riding = R.thrash > 0 && !G.hold && TENSION[S.tension];
+    R.prog += inside ? rr.gain * dt : riding ? 0 : -rr.drain * dt;
 
     // 찌가 조금씩 끌려온다
     var tgt = bobTarget(G.p);
@@ -819,6 +899,8 @@
       c.beginPath(); c.ellipse(rp.x, rp.y + 2, rp.r * rp.s, rp.r * .35 * rp.s, 0, 0, Math.PI * 2); c.stroke();
     }
 
+    drawMonShadow(c);
+
     // 낚아 올리는 중이면 찌 아래 물고기 그림자
     if (G.st === 'reel') {
       c.fillStyle = 'rgba(5,30,50,.35)';
@@ -833,14 +915,14 @@
     var tip = tipPos(), b = G.bob;
     c.strokeStyle = 'rgba(255,255,255,.75)'; c.lineWidth = Math.min(2.6, Math.max(1, 1 / view.k));
     c.beginPath(); c.moveTo(tip.x, tip.y);
-    var slack = (G.st === 'wait' || G.st === 'bite') ? 40 : G.st === 'reel' ? 0 : 12;
+    var slack = (G.st === 'wait' || G.st === 'bite') ? 40 : (G.st === 'reel' || G.st === 'mon') ? 0 : 12;
     c.quadraticCurveTo((tip.x + b.x) / 2, Math.max(tip.y, b.y) + slack, b.x, b.y - 6 * b.s);
     c.stroke();
 
     var dip = 0;
     if (G.st === 'wait') dip = Math.sin(T * 3) * 1.5 + (G.nibble > 0 ? 4 : 0);
     if (G.st === 'bite') dip = 9 + Math.sin(T * 40) * 2;
-    if (G.st === 'reel') dip = 4;
+    if (G.st === 'reel' || G.st === 'mon') dip = 4;
     var br = 7 * b.s, bx = b.x, by = b.y + dip * b.s;
     c.fillStyle = '#fff'; c.beginPath(); c.arc(bx, by, br, 0, Math.PI * 2); c.fill();
     c.fillStyle = '#e74c3c'; c.beginPath(); c.arc(bx, by, br, Math.PI, Math.PI * 2); c.fill();
@@ -860,6 +942,7 @@
 
     if (G.st === 'charge') drawPower(c);
     if (G.st === 'reel') drawReel(c);
+    if (G.st === 'mon') drawMonFight(c);
   }
 
   function drawPier(c) {
@@ -890,7 +973,7 @@
     // 낚싯대 — 감고 있을 때는 휜다
     c.strokeStyle = '#3d2b1f'; c.lineWidth = 3;
     c.beginPath(); c.moveTo(HAND.x - 14, HAND.y + 10);
-    if (G.st === 'reel') c.quadraticCurveTo(HAND.x + 40, tip.y - 40, tip.x, tip.y);
+    if (G.st === 'reel' || G.st === 'mon') c.quadraticCurveTo(HAND.x + 40, tip.y - 40, tip.x, tip.y);
     else c.lineTo(tip.x, tip.y);
     c.stroke();
     c.lineCap = 'butt';
@@ -905,11 +988,14 @@
     c.fillText(view.k < .6 ? '멀리 = 귀한 물고기' : '멀리 던질수록 귀한 물고기', x + w / 2, y - 9);
   }
 
-  function drawReel(c) {
-    var R = G.reel, fish = G.catchObj.fish;
+  /** 감기 화면 — 왼쪽 줄 장력 · 가운데 초록 칸 · 오른쪽 진행도 */
+  function drawFight(c, R, col, shape, prog, bottomText) {
+    var TS = TENSION[S.tension];
     var x = 836, y = 126, w = 48, h = 350;
+    var shake = R.ten > .7 ? Math.sin(T * 60) * 2.5 : 0;     // 줄이 끊어지기 직전엔 떨린다
+    c.save(); c.translate(shake, 0);
     c.fillStyle = 'rgba(10,25,40,.72)';
-    roundRect(c, x - 10, y - 34, w + 56, h + 48, 12); c.fill();
+    roundRect(c, x - (TS ? 34 : 10), y - 34, w + (TS ? 80 : 56), h + (bottomText ? 72 : 48), 12); c.fill();
     c.fillStyle = '#1e5b85'; c.fillRect(x, y, w, h);
     // 초록 칸
     var zy = y + h - (R.zb + R.zs) * h, zh = R.zs * h;
@@ -917,16 +1003,61 @@
     c.fillStyle = inside ? 'rgba(110,235,140,.75)' : 'rgba(110,235,140,.45)';
     c.fillRect(x + 2, zy, w - 4, zh);
     c.strokeStyle = '#c8ffd3'; c.lineWidth = 2; c.strokeRect(x + 2, zy, w - 4, zh);
-    // 물고기
-    drawFish(c, x + w / 2, y + h - R.f * h, 34, fish.color, fish.shape, Math.sin(T * 6) > 0 ? 1 : -1);
+    // 물고기 — 몸부림칠 때는 빨갛게 번쩍인다
+    var thr = TS && R.thrash > 0;
+    drawFish(c, x + w / 2, y + h - R.f * h, 34, thr && Math.sin(T * 30) > 0 ? '#ff3b3b' : col, shape, Math.sin(T * 6) > 0 ? 1 : -1);
     // 진행 막대
     var px = x + w + 10;
     c.fillStyle = '#0b2638'; c.fillRect(px, y, 12, h);
-    var pr = clamp(R.prog, 0, 1);
+    var pr = clamp(prog, 0, 1);
     c.fillStyle = pr < .3 ? '#e74c3c' : pr < .7 ? '#f1c40f' : '#2ecc71';
     c.fillRect(px, y + h - pr * h, 12, pr * h);
-    c.fillStyle = '#fff'; c.font = '700 ' + Math.max(12, 10 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif'; c.textAlign = 'center';
-    c.fillText(view.k < .6 ? '꾹!' : '꾹 눌러 올리기', x + w / 2 + 14, y - 14);
+    // 줄 장력 막대
+    if (TS) {
+      var tx = x - 24, tn = clamp(R.ten, 0, 1);
+      c.fillStyle = '#0b2638'; c.fillRect(tx, y, 12, h);
+      c.fillStyle = tn < .5 ? '#2ecc71' : tn < .8 ? '#f1c40f' : '#ff3b3b';
+      c.fillRect(tx, y + h - tn * h, 12, tn * h);
+    }
+    c.font = '700 ' + Math.max(12, 10 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif'; c.textAlign = 'center';
+    c.fillStyle = thr ? '#ff6b6b' : '#fff';
+    c.fillText(thr ? (view.k < .6 ? '떼!' : '몸부림! 손 떼기') : (view.k < .6 ? '꾹!' : '꾹 눌러 올리기'), x + w / 2 + (TS ? 2 : 14), y - 14);
+    if (bottomText) {
+      c.fillStyle = '#fff';
+      c.font = '700 ' + Math.max(11, 9 / view.k) + 'px "Segoe UI", "맑은 고딕", sans-serif';
+      c.fillText(bottomText, x + w / 2 + (TS ? 2 : 14), y + h + 32);
+    }
+    c.restore();
+  }
+  function drawReel(c) {
+    var fish = G.catchObj.fish;
+    drawFight(c, G.reel, fish.color, fish.shape, G.reel.prog, '');
+  }
+  function drawMonFight(c) {
+    var M = G.mon, mv = NET.mon;
+    if (!M) return;
+    var k = MON[M.kind] || MON.king;
+    var small = view.k < .6;
+    var txt = !mv ? '' : mv.ph === 'appear' ? (small ? '곧 시작' : '곧 시작 · ' + mv.joined.length + '명')
+      : small ? mv.inz.length + '/' + mv.joined.length + '명' : '함께 ' + mv.joined.length + '명 · 칸 안 ' + mv.inz.length + '명';
+    drawFight(c, M, k.color, k.shape, mv ? mv.prog : 0, txt);
+  }
+
+  // 괴물 그림자 — 바다 가운데를 크게 돌아다닌다
+  function monShadowPos() { return { x: 600 + Math.sin(T * .45) * 170, y: 335 + Math.sin(T * .3) * 22, s: .85 }; }
+  function drawMonShadow(c) {
+    var mv = NET.mon;
+    if (!mv || (mv.ph !== 'appear' && mv.ph !== 'fight')) return;
+    var p = monShadowPos(), s = p.s, dir = Math.cos(T * .45) > 0 ? 1 : -1;
+    c.save();
+    c.globalAlpha = mv.ph === 'appear' ? .25 + .1 * Math.sin(T * 3) : .42;
+    c.fillStyle = '#04111d';
+    c.beginPath(); c.ellipse(p.x, p.y, 120 * s, 26 * s, 0, 0, Math.PI * 2); c.fill();
+    c.beginPath();
+    c.moveTo(p.x - dir * 110 * s, p.y);
+    c.lineTo(p.x - dir * 165 * s, p.y - 26 * s); c.lineTo(p.x - dir * 165 * s, p.y + 26 * s);
+    c.closePath(); c.fill();
+    c.restore();
   }
 
   function roundRect(c, x, y, w, h, r) {
@@ -960,7 +1091,8 @@
     $('hCount').textContent = '🐟 ' + S.total + '마리';
     $('bSound').textContent = S.sound ? '🔊' : '🔇';
     $('bHide').title = '메모장으로 전환 (' + KEYNAME[S.boss] + ')';
-    $('help').innerHTML = '스페이스·클릭 꾹 → 던지기 &nbsp;·&nbsp; 입질(!) 때 누르기 &nbsp;·&nbsp; 감을 땐 꾹 눌러 초록 칸에 물고기 담기 &nbsp;|&nbsp; <b>' +
+    $('help').innerHTML = '스페이스·클릭 꾹 → 던지기 &nbsp;·&nbsp; 입질(!) 때 누르기 &nbsp;·&nbsp; 감을 땐 꾹 눌러 초록 칸에 물고기 담기' +
+      (S.tension ? ' &nbsp;·&nbsp; 빨갛게 몸부림치면 손 떼기' : '') + ' &nbsp;|&nbsp; <b>' +
       KEYNAME[S.boss] + '</b> 메모장';
   }
 
@@ -1020,6 +1152,9 @@
     addItem(list, '🪱', '미끼', S.bait, BAIT_MAX, BAIT_COST,
       '입질이 빨라지고 귀한 물고기가 더 자주 문다',
       function () { S.bait++; });
+    addItem(list, '🧵', '낚싯줄', S.line, LINE_MAX, LINE_COST,
+      S.tension ? '몸부림 때 장력이 덜 찬다 (현재 -' + (15 * (S.line - 1)) + '%)' : '줄 장력이 꺼져 있어 지금은 효과 없음',
+      function () { S.line++; });
   }
   function addItem(list, icon, name, lv, max, cost, desc, apply) {
     var row = document.createElement('div'); row.className = 'item';
@@ -1048,15 +1183,17 @@
     $('sBoss').value = S.boss;
     $('sAuto').checked = !!S.autoHide;
     $('sSound').checked = !!S.sound;
+    $('sTension').value = String(S.tension);
     resetArmed = false; $('sReset').textContent = '초기화';
   }
   $('sBoss').addEventListener('change', function () { S.boss = this.value; save(); hud(); });
   $('sAuto').addEventListener('change', function () { S.autoHide = this.checked; save(); });
   $('sSound').addEventListener('change', function () { S.sound = this.checked; save(); hud(); });
+  $('sTension').addEventListener('change', function () { S.tension = Number(this.value) || 0; save(); hud(); });
   $('sReset').addEventListener('click', function () {
     // confirm() 창을 띄우면 창 포커스가 빠져 메모장으로 바뀌므로 두 번 누르게 한다
     if (!resetArmed) { resetArmed = true; this.textContent = '한 번 더 누르면 삭제'; return; }
-    var keep = { memo: S.memo, memoClean: S.memoClean, boss: S.boss, autoHide: S.autoHide, sound: S.sound, win: S.win, nick: S.nick, room: S.room };
+    var keep = { memo: S.memo, memoClean: S.memoClean, boss: S.boss, autoHide: S.autoHide, sound: S.sound, win: S.win, nick: S.nick, room: S.room, tension: S.tension };
     S = JSON.parse(JSON.stringify(DEF));
     for (var k2 in keep) S[k2] = keep[k2];
     save(); hud(); renderSet();
@@ -1086,6 +1223,7 @@
     closeMenu();
     memoText.focus();
     syncStatus();
+    if (G.mon) { G.mon.sentIn = false; netSend({ t: 'monIn', v: false }); }   // 메모장 보는 동안은 감지 않는 것으로
     netSync();
   }
   function toGame() {
@@ -1097,6 +1235,7 @@
     gameEl.hidden = false;
     resize();
     last = performance.now();
+    if (G.mon) G.mon.sentIn = null;
     netSync();
   }
 
@@ -1267,8 +1406,9 @@
     };
     ws.onclose = function () {
       if (NET.ws !== ws) return;
-      NET.ws = null; NET.on = false; NET.you = null; NET.players = {};
-      netPill(); renderRoom(); cupBar();
+      NET.ws = null; NET.on = false; NET.you = null; NET.players = {}; NET.mon = null;
+      monQuit(null);
+      netPill(); renderRoom(); cupBar(); monBar();
       if (NET.want) netRetry();
     };
   }
@@ -1282,7 +1422,8 @@
     NET.want = false;
     clearTimeout(NET.timer);
     var ws = NET.ws;
-    NET.ws = null; NET.on = false; NET.you = null; NET.players = {}; NET.cup = null; NET.code = '';
+    NET.ws = null; NET.on = false; NET.you = null; NET.players = {}; NET.cup = null; NET.code = ''; NET.mon = null;
+    monQuit(null);
     if (ws) { try { ws.close(); } catch (e) {} }
   }
   function netLeave() {
@@ -1297,7 +1438,7 @@
   // 내 상태(던지기·입질·감기·자리 비움)가 바뀔 때만 알린다
   function netSync() {
     if (!NET.on) return;
-    var st = G.st === 'back' || G.st === 'result' ? 'idle' : G.st;
+    var st = G.st === 'back' || G.st === 'result' ? 'idle' : G.st === 'mon' ? 'reel' : G.st;
     var away = mode === 'memo';
     if (st === NET.sentSt && away === NET.sentAway) return;
     NET.sentSt = st; NET.sentAway = away;
@@ -1314,6 +1455,7 @@
       });
       NET.players = next;
       netCup(m.cup, true);
+      netMon(m.mon, '', true);
       $('rmErr').textContent = '';
       netPill(); renderRoom();
       return;
@@ -1336,6 +1478,8 @@
       return;
     }
     if (m.t === 'cup') { netCup(m.cup); return; }
+    if (m.t === 'mon') { netMon(m.mon, m.by); return; }
+    if (m.t === 'note') { msg(m.m, 2000); return; }
     if (m.t === 'err') {
       // 방이 가득 찼거나 코드가 잘못된 경우 — 다시 넣게 한다
       netDrop();
@@ -1352,7 +1496,8 @@
     if (!S.room) { el.hidden = true; return; }
     var live = NET.on && NET.you;
     el.hidden = false;
-    el.textContent = live ? '👥 ' + Object.keys(NET.players).length : '👥 연결 중…';
+    el.textContent = live ? '👥 ' + Object.keys(NET.players).length : '👥 …';
+    el.title = live ? '함께 낚시 중' : '서버 연결 중';
     el.classList.toggle('off', !live);
   }
 
@@ -1437,7 +1582,8 @@
         list.appendChild(row);
       });
     var running = NET.cup && (NET.cup.ph === 'count' || NET.cup.ph === 'run');
-    $('rmCup3').disabled = $('rmCup5').disabled = !live || !!running;
+    $('rmCup3').disabled = $('rmCup5').disabled = !live || !!running || !!NET.mon;
+    $('rmMon').disabled = !live || !!running || !!NET.mon;
   }
   function roomJoin() {
     var nick = $('rmNick').value.replace(/\s+/g, ' ').trim().slice(0, 10);
@@ -1454,6 +1600,118 @@
   $('rmLeave').addEventListener('click', netLeave);
   $('rmCup3').addEventListener('click', function () { netSend({ t: 'cup', mins: 3 }); $('ovRoom').hidden = true; });
   $('rmCup5').addEventListener('click', function () { netSend({ t: 'cup', mins: 5 }); $('ovRoom').hidden = true; });
+  $('rmMon').addEventListener('click', function () { netSend({ t: 'monCall' }); $('ovRoom').hidden = true; });
+
+  // ── 괴물 물고기 ──
+  // 서버가 진행도를 계산한다. 여기서는 각자 감기를 하고 '칸 안에 있는지' 만 알린다.
+  function monCanJoin() {
+    var mv = NET && NET.mon;
+    return !!(NET.on && mv && (mv.ph === 'appear' || mv.ph === 'fight') && mode === 'game' &&
+      G.st !== 'mon' && G.st !== 'reel' && G.st !== 'result' && mv.joined.indexOf(NET.you) < 0);
+  }
+  function monJoin() {
+    var mv = NET.mon;
+    G.reel = null; G.catchObj = null; G.hold = false; G.t = 0;
+    G.st = 'mon';
+    G.mon = {
+      kind: mv.kind, joinAt: performance.now(),
+      f: .5, ft: .5, fturn: 0, zs: zoneSize(), zb: .3, zv: 0,
+      ten: 0, thrash: 0, thrashIn: 2.5, sentIn: null, splashIn: .3,
+    };
+    netSend({ t: 'monJoin' });
+    msg('🦈 합류! 꾹 눌러 함께 감기', 1400);
+    monBar();
+  }
+  function monQuit(text) {
+    if (G.st !== 'mon') return;
+    if (text) msg(text, 1600);
+    if (NET.on) netSend({ t: 'monOut' });
+    G.mon = null; G.hold = false;
+    G.st = 'back'; G.t = 0;
+    G.from = { x: G.bob.x, y: G.bob.y, s: G.bob.s };
+  }
+  function updateMon(dt) {
+    var M = G.mon, mv = NET.mon;
+    if (!M) return;
+    if (!mv || !NET.on || (mv.ph !== 'appear' && mv.ph !== 'fight')) { monQuit(null); return; }
+    // 합류 요청이 서버에 안 닿았으면 (이미 끝났거나) 빠진다
+    if (performance.now() - M.joinAt > 2500 && mv.joined.indexOf(NET.you) < 0) { monQuit(null); return; }
+    var k = MON[M.kind] || MON.king;
+    if (stepFight(M, k, dt, mv.ph === 'fight')) {
+      beep(160, .3, 'sawtooth', .05);
+      monQuit('줄이 끊어졌어요! 괴물에게서 떨어졌어요');
+      return;
+    }
+    // 몸부림 때 손을 떼고 버티는 것도 함께 감는 것으로 친다
+    var inside = mv.ph === 'fight' && (inZone(M) || (M.thrash > 0 && !G.hold && !!TENSION[S.tension]));
+    if (inside !== M.sentIn) { M.sentIn = inside; netSend({ t: 'monIn', v: inside }); }
+    var sp = monShadowPos();
+    G.bob.x = sp.x + (M.f - .5) * 40; G.bob.y = sp.y - 4; G.bob.s = sp.s;
+    M.splashIn -= dt;
+    if (M.splashIn <= 0) { splash(G.bob.x, G.bob.y, G.bob.s, 3); M.splashIn = rnd(.2, .5); }
+  }
+  function netMon(mv, by, quiet) {
+    var prev = NET.mon;
+    if (!mv) { NET.mon = null; monBar(); return; }
+    NET.monAt = performance.now();
+    if (mv.ph === 'appear' || mv.ph === 'fight') {
+      NET.mon = mv;
+      if (!quiet && (!prev || prev.id !== mv.id)) {
+        msg('🦈 괴물 물고기 출현!', 1800);
+        feedLine((by ? by + ' 님이 부른 ' : '') + mv.name + ' 출현 — 스페이스로 합류');
+        beep(220, .4, 'sawtooth', .04);
+      }
+    } else {
+      NET.mon = null;
+      monFinish(mv);
+    }
+    monBar();
+    if (!$('ovRoom').hidden) renderRoom();
+  }
+  function monFinish(mv) {
+    var mine = G.st === 'mon' || (mv.joined || []).indexOf(NET.you) >= 0;
+    if (mv.ph === 'win') {
+      if (mine) showMonWin(mv);
+      else feedLine('🦈 ' + mv.name + ' 잡았다! (' + (mv.names || []).join(', ') + ')');
+    } else if (mv.ph === 'lose') {
+      if (G.st === 'mon') monQuit(null);
+      if (mine) msg('괴물이 도망갔어요…', 1600); else feedLine('🦈 괴물이 도망갔어요');
+    } else if (mv.ph === 'gone') {
+      feedLine('🦈 아무도 합류하지 않아 괴물이 사라졌어요');
+    }
+  }
+  function showMonWin(mv) {
+    var k = MON[mv.kind] || MON.king;
+    G.mon = null; G.reel = null; G.catchObj = null;
+    G.st = 'result'; G.hold = false;
+    var cc = $('catchCv'), jk = $('cJunk');
+    cc.hidden = false; jk.hidden = true;
+    var cg = cc.getContext('2d');
+    cg.clearRect(0, 0, cc.width, cc.height);
+    drawFish(cg, cc.width / 2, cc.height / 2 + 6, 330, k.color, k.shape, 1);
+    $('cName').textContent = mv.name;
+    $('cRar').textContent = '괴물'; $('cRar').style.background = '#c0392b';
+    $('cInfo').textContent = '+' + mv.reward + ' 골드 · 함께: ' + (mv.names || []).join(', ');
+    $('cNew').textContent = '🦈 협동 성공!';
+    S.gold += mv.reward;
+    S.monWins = (S.monWins || 0) + 1;
+    save(); hud();
+    splash(G.bob.x, G.bob.y, G.bob.s, 20);
+    $('ovCatch').hidden = false;
+  }
+  function monBar() {
+    var el = $('monBar'), mv = NET.mon;
+    if (!mv || !NET.on) { el.hidden = true; return; }
+    var left = Math.max(0, Math.ceil((mv.left - (performance.now() - NET.monAt)) / 1000));
+    var mine = G.st === 'mon', n = mv.joined.length;
+    el.textContent = mv.ph === 'appear'
+      ? (mine ? '🦈 합류 완료 · ' + left + '초 뒤 시작 · ' + n + '명' : '🦈 괴물 출현! 스페이스로 합류 · ' + left + '초')
+      : '🦈 ' + Math.round(mv.prog * 100) + '% · ' + n + '명 · ' + left + '초' + (mine ? '' : ' · 스페이스로 합류');
+    el.classList.toggle('join', !mine);
+    el.hidden = false;
+  }
+  setInterval(monBar, 250);
+  $('monBar').addEventListener('click', function () { if (monCanJoin()) monJoin(); });
 
   // ── 다른 사람 배 ──
   function drawBoats(c) {
@@ -1602,7 +1860,7 @@
       G: G, S: S, RAR: RAR, ZONE: ZONE, press: press, release: release, toMemo: toMemo, toGame: toGame,
       step: function (sec) { var n = Math.round(sec / .02); for (var i = 0; i < n; i++) if (mode === 'game' && !panelOpen()) update(.02); draw(); },
       mode: function () { return mode; },
-      NET: NET, netConnect: netConnect,
+      NET: NET, netConnect: netConnect, TENSION: TENSION, MON: MON, stepFight: stepFight, monJoin: monJoin, setThrash: function (a, b) { THRASH_MIN = a; THRASH_MAX = b; },
     };
   }
 })();

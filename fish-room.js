@@ -35,6 +35,24 @@ const FISH = {
   chamchi: [100, 250, 600], dotsae: [120, 300, 700],
 };
 
+// 괴물 물고기 — 방 사람들이 함께 감는 협동 이벤트
+//   appear: 나타나서 합류를 받는 시간 → fight: 함께 감는 시간
+//   진행도는 '초록 칸 안에 물고기를 담고 있는 사람의 비율' 로 오르내린다.
+//   사람이 많을수록 빨리 차서 혼자보다 여럿이 유리하다.
+const MON_KINDS = [
+  { id: 'king', name: '대왕 참다랑어', diff: 1 },
+  { id: 'angler', name: '심해 아귀왕', diff: 1.15 },
+  { id: 'sail', name: '폭풍 돛새치', diff: 1.3 },
+];
+const MON_APPEAR_MS = 12000;
+const MON_FIGHT_MS = 45000;
+const MON_TICK_MS = 250;
+const MON_START_PROG = 0.25;
+const MON_NEED = 0.45;                 // 참여자 중 이 비율 이상이 칸 안에 있어야 진행도가 오른다
+const MON_CALL_COOLDOWN_MS = 180000;    // 직접 부르기는 3분에 한 번
+const MON_AUTO_MIN_MS = 10 * 60000;     // 2명 이상이면 10~20분마다 저절로 나타난다
+const MON_AUTO_MAX_MS = 20 * 60000;
+
 function points(id, size) {
   const f = FISH[id];
   return Math.max(1, Math.round(f[2] * size / ((f[0] + f[1]) / 2)));
@@ -78,7 +96,8 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
   function sendRoom(room) {
     const players = [...room.players.values()].map(pView);
     const cup = cupView(room);
-    for (const p of room.players.values()) sendTo(p, { t: 'room', you: p.id, code: room.code, players, cup });
+    const mon = monView(room);
+    for (const p of room.players.values()) sendTo(p, { t: 'room', you: p.id, code: room.code, players, cup, mon });
   }
 
   function join(me, m) {
@@ -90,7 +109,7 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
     let room = rooms.get(code);
     if (!room) {
       if (rooms.size >= MAX_ROOMS) return sendTo(me, { t: 'err', m: '지금은 방을 더 만들 수 없어요' });
-      room = { code, players: new Map(), cup: null, timers: [], gone: new Map() };
+      room = { code, players: new Map(), cup: null, timers: [], gone: new Map(), mon: null, monTick: null, monNext: null, monLastCall: 0 };
       rooms.set(code, room);
     }
     if (room.players.size >= MAX_PER_ROOM) return sendTo(me, { t: 'err', m: '방이 가득 찼어요 (최대 8명)' });
@@ -116,6 +135,7 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
       }
     }
     sendRoom(room);
+    monSchedule(room);
   }
 
   function leave(me, tell) {
@@ -124,11 +144,14 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
     room.players.delete(me.id);
     me.room = null;
     if (me.haul || me.best) room.gone.set(me.name, { haul: me.haul, best: me.best, at: Date.now() });
+    if (room.mon) { room.mon.joined.delete(me.id); room.mon.inz.delete(me.id); }
     if (!room.players.size) {
       room.timers.forEach(clearTimeout);
+      monClear(room);
       rooms.delete(room.code);
     } else {
       sendRoom(room);
+      if (room.players.size < 2) { clearTimeout(room.monNext); room.monNext = null; }
     }
     if (tell) sendTo(me, { t: 'left' });
   }
@@ -140,6 +163,7 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
     if (st === me.st && away === me.away) return;
     me.st = st;
     me.away = away;
+    if (away && me.room.mon) me.room.mon.inz.delete(me.id);   // 메모장 보는 동안은 감는 것으로 치지 않는다
     broadcast(me.room, { t: 'p', i: me.id, st, a: away }, me.id);
   }
 
@@ -180,6 +204,7 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
     const room = me.room;
     if (!room) return;
     if (room.cup && (room.cup.phase === 'count' || room.cup.phase === 'run')) return;
+    if (room.mon) return sendTo(me, { t: 'note', m: '괴물 물고기와 싸우는 중이라 대회를 열 수 없어요' });
     const mins = m.mins === 5 ? 5 : 3;
     const now = Date.now();
     const scores = new Map();
@@ -207,6 +232,107 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
     broadcast(room, { t: 'cup', cup: cupView(room) });
   }
 
+  // ── 괴물 물고기 ──
+  function cupRunning(room) { return !!(room.cup && (room.cup.phase === 'count' || room.cup.phase === 'run')); }
+  function monView(room) {
+    const m = room.mon;
+    if (!m) return null;
+    return {
+      id: m.id, kind: m.kind.id, name: m.kind.name, ph: m.ph,
+      left: Math.max(0, m.endAt - Date.now()),
+      prog: Math.round(m.prog * 1000) / 1000,
+      joined: [...m.joined], inz: [...m.inz],
+    };
+  }
+  function monClear(room) {
+    clearInterval(room.monTick); room.monTick = null;
+    clearTimeout(room.monNext); room.monNext = null;
+    room.mon = null;
+  }
+  function monSchedule(room) {
+    if (room.monNext || room.mon || room.players.size < 2) return;
+    const wait = MON_AUTO_MIN_MS + Math.random() * (MON_AUTO_MAX_MS - MON_AUTO_MIN_MS);
+    room.monNext = setTimeout(() => {
+      room.monNext = null;
+      if (!rooms.has(room.code)) return;
+      if (room.players.size >= 2 && !room.mon && !cupRunning(room)) monStart(room, null);
+      else monSchedule(room);
+    }, wait);
+  }
+  let monSeq = 0;
+  function monStart(room, by) {
+    const kind = MON_KINDS[Math.floor(Math.random() * MON_KINDS.length)];
+    clearTimeout(room.monNext); room.monNext = null;
+    room.mon = {
+      id: ++monSeq, kind, ph: 'appear', prog: MON_START_PROG,
+      endAt: Date.now() + MON_APPEAR_MS, joined: new Set(), inz: new Set(),
+    };
+    broadcast(room, { t: 'mon', mon: monView(room), by: by || '' });
+    room.monTick = setInterval(() => monStep(room), MON_TICK_MS);
+  }
+  function monStep(room) {
+    const m = room.mon;
+    if (!m) return;
+    const now = Date.now();
+    for (const id of m.joined) if (!room.players.has(id)) { m.joined.delete(id); m.inz.delete(id); }
+    if (m.ph === 'appear') {
+      if (now >= m.endAt) {
+        if (!m.joined.size) return monEnd(room, 'gone');
+        m.ph = 'fight';
+        m.endAt = now + MON_FIGHT_MS;
+      }
+      broadcast(room, { t: 'mon', mon: monView(room) });
+      return;
+    }
+    const k = m.joined.size;
+    if (!k) return monEnd(room, 'lose');
+    const f = m.inz.size / k;
+    const rate = (0.10 + 0.025 * (k - 1)) / m.kind.diff;     // 사람이 많을수록 빨리 찬다
+    m.prog += rate * (f - MON_NEED) * (MON_TICK_MS / 1000);
+    if (m.prog >= 1) return monEnd(room, 'win');
+    if (m.prog <= 0 || now >= m.endAt) return monEnd(room, 'lose');
+    broadcast(room, { t: 'mon', mon: monView(room) });
+  }
+  function monEnd(room, result) {
+    const m = room.mon;
+    const view = monView(room);
+    view.ph = result;
+    view.prog = result === 'win' ? 1 : Math.max(0, view.prog);
+    view.names = [...m.joined].map((id) => (room.players.get(id) || {}).name).filter(Boolean);
+    view.reward = result === 'win' ? Math.round((200 + 80 * m.joined.size) * m.kind.diff) : 0;
+    clearInterval(room.monTick); room.monTick = null;
+    room.mon = null;
+    broadcast(room, { t: 'mon', mon: view });
+    monSchedule(room);
+  }
+  function monCall(me) {
+    const room = me.room;
+    if (!room) return;
+    const now = Date.now();
+    if (room.mon) return sendTo(me, { t: 'note', m: '이미 괴물이 나와 있어요' });
+    if (cupRunning(room)) return sendTo(me, { t: 'note', m: '대회 중에는 부를 수 없어요' });
+    const wait = room.monLastCall + MON_CALL_COOLDOWN_MS - now;
+    if (wait > 0) return sendTo(me, { t: 'note', m: '괴물은 3분에 한 번만 부를 수 있어요 (' + Math.ceil(wait / 1000) + '초 남음)' });
+    room.monLastCall = now;
+    monStart(room, me.name);
+  }
+  function monJoin(me) {
+    const m = me.room && me.room.mon;
+    if (!m || me.away || (m.ph !== 'appear' && m.ph !== 'fight')) return;
+    m.joined.add(me.id);
+    broadcast(me.room, { t: 'mon', mon: monView(me.room) });
+  }
+  function monIn(me, v) {
+    const m = me.room && me.room.mon;
+    if (!m || !m.joined.has(me.id)) return;
+    if (v && !me.away) m.inz.add(me.id); else m.inz.delete(me.id);
+  }
+  function monOut(me) {
+    const m = me.room && me.room.mon;
+    if (!m) return;
+    m.joined.delete(me.id); m.inz.delete(me.id);
+  }
+
   function onMsg(me, text, close) {
     const now = Date.now();
     if (now - me.rateT > 1000) { me.rateT = now; me.rateN = 0; }
@@ -220,6 +346,10 @@ module.exports = function makeFish({ encodeFrame, feed, GUID }) {
       case 'st': return setState(me, m);
       case 'catch': return onCatch(me, m);
       case 'cup': return cupStart(me, m);
+      case 'monCall': return monCall(me);
+      case 'monJoin': return monJoin(me);
+      case 'monIn': return monIn(me, !!m.v);
+      case 'monOut': return monOut(me);
       default: return;            // ping 등은 그냥 받기만 한다 (연결 유지용)
     }
   }
